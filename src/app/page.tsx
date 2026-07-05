@@ -4,8 +4,37 @@ import { FormEvent, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ToolResult, ToolResultCard } from "@/components/cards/ToolResultCard";
+import { PlatformBadge } from "@/components/cards/primitives";
 import { TicketSidebar } from "@/components/dashboard/TicketSidebar";
 import { ANALYSIS_TOOL_NAMES, CampaignDashboard } from "@/components/dashboard/CampaignDashboard";
+
+const PLATFORMS = ["META", "LINKEDIN", "GOOGLE", "TABOOLA", "STACKADAPT"];
+
+function LogoMark() {
+  return (
+    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-400 to-teal-600 shadow-md shadow-teal-500/30 ring-1 ring-teal-500/20 dark:from-teal-300 dark:to-teal-500">
+      <svg viewBox="0 0 20 20" fill="none" className="h-5 w-5 text-accent-foreground">
+        <rect x="3" y="10" width="3" height="7" rx="1" fill="currentColor" opacity="0.65" />
+        <rect x="8.5" y="6" width="3" height="11" rx="1" fill="currentColor" opacity="0.85" />
+        <rect x="14" y="2.5" width="3" height="14.5" rx="1" fill="currentColor" />
+      </svg>
+      <div className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-white shadow-sm ring-2 ring-white dark:bg-zinc-950 dark:ring-zinc-950">
+        <svg viewBox="0 0 16 16" fill="none" className="h-2.5 w-2.5">
+          <path
+            d="M8 1l1.2 3.8L13 6l-3.8 1.2L8 11l-1.2-3.8L3 6l3.8-1.2L8 1z"
+            fill="url(#spark-gradient)"
+          />
+          <defs>
+            <linearGradient id="spark-gradient" x1="3" y1="1" x2="13" y2="11">
+              <stop offset="0" stopColor="#2dd4bf" />
+              <stop offset="1" stopColor="#0d9488" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+    </div>
+  );
+}
 
 type Message = {
   role: "user" | "assistant";
@@ -101,13 +130,26 @@ export default function Home() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-zinc-50 dark:bg-black">
-      <header className="border-b border-zinc-200 bg-white px-6 py-4 dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-          Campaign Intelligence Assistant
-        </h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Cross-platform campaign advisor — Meta · LinkedIn · Google Ads · Taboola · StackAdapt
-        </p>
+      <header className="relative flex items-center justify-between gap-4 bg-gradient-to-r from-white via-white to-teal-50/60 px-6 py-3.5 dark:from-zinc-950 dark:via-zinc-950 dark:to-teal-950/20">
+        <div className="flex items-center gap-3">
+          <LogoMark />
+          <div>
+            <h1 className="text-base font-semibold leading-tight tracking-tight text-zinc-900 dark:text-zinc-50">
+              Campaign{" "}
+              <span className="bg-gradient-to-r from-teal-500 to-teal-700 bg-clip-text text-transparent dark:from-teal-300 dark:to-teal-500">
+                Intelligence
+              </span>{" "}
+              Assistant
+            </h1>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">Cross-platform campaign advisor</p>
+          </div>
+        </div>
+        <div className="hidden items-center gap-1.5 md:flex">
+          {PLATFORMS.map((p) => (
+            <PlatformBadge key={p} platform={p} />
+          ))}
+        </div>
+        <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-zinc-200 to-transparent dark:via-zinc-800" />
       </header>
 
       <div className="flex min-h-0 flex-1">

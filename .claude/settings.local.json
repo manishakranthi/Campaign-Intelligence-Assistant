@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements)",
+      "PowerShell(Get-ChildItem \"$env:LOCALAPPDATA\\\\Microsoft\\\\WinGet\\\\Packages\\\\OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe\" -Recurse -Filter \"node.exe\" | Select-Object FullName)",
+      "PowerShell([Environment]::GetEnvironmentVariable\\(\"PATH\",\"User\"\\) -split ';' | Select-String -Pattern 'node')",
+      "PowerShell(node -v)",
+      "PowerShell(npm -v)",
+      "Skill(run)",
+      "Skill(run:*)"
+    ]
+  }
+}

@@ -404,9 +404,16 @@ async function callChatCompletionsWithRetry(
   messages: ConversationMessage[],
   system: string,
   tools: ReturnType<typeof buildToolsParam>,
+  deadlineAt: number,
   maxRetries: number = 3
 ): Promise<AssistantTurn> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Serverless hosts (Netlify, etc.) kill the whole function at a hard wall-clock limit,
+    // returning a bare 502 to the client instead of letting us respond gracefully. Bound every
+    // attempt to whatever's left of the request's own deadline (recomputed fresh each attempt,
+    // so retries can't each claim a full budget and blow past it), not a fixed constant, so we
+    // always return our own JSON fallback before the platform pulls the plug.
+    const attemptTimeoutMs = Math.max(500, Math.min(15000, deadlineAt - Date.now()));
     try {
       console.log(`[${provider.name}] Attempt ${attempt + 1}/${maxRetries} for model: ${provider.model}`);
 
@@ -417,20 +424,19 @@ async function callChatCompletionsWithRetry(
         max_tokens: 2048,
       };
 
-      const response = await Promise.race([
-        fetch(provider.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${provider.apiKey}`,
-            ...provider.extraHeaders,
-          },
-          body: JSON.stringify(payload),
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Request timeout after 30s")), 30000)
-        ),
-      ]);
+      const response = await fetch(provider.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${provider.apiKey}`,
+          ...provider.extraHeaders,
+        },
+        body: JSON.stringify(payload),
+        // AbortSignal actually cancels the underlying request (unlike racing a setTimeout
+        // promise, which just abandons it while it keeps running server-side) -- and it's the
+        // only variant that reliably cut off a hanging fetch under this Next.js dev runtime.
+        signal: AbortSignal.timeout(attemptTimeoutMs),
+      });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -451,24 +457,27 @@ async function callChatCompletionsWithRetry(
       const status = (err as Error & { status?: number }).status;
       console.error(`[${provider.name}] Attempt ${attempt + 1} failed:`, errorMsg);
 
-      // A daily-quota 429 (e.g. Groq's "tokens per day (TPD)") won't clear for hours -- retrying
-      // just burns ~90s before falling back to the next provider for nothing. Fail fast instead.
-      if (status === 429 && /per day|\(TPD\)/i.test(errorMsg)) {
-        console.log(`[${provider.name}] Daily quota exhausted -- skipping retries, failing over.`);
+      // Serverless functions run under a hard execution timeout (Netlify kills the invocation
+      // outright, surfacing as a 502 to the client, not our graceful fallback JSON). A 429's
+      // retry hint can be tens of seconds -- far longer than that budget -- so never block-and-
+      // retry the SAME provider on a rate limit. Fail over to the next provider immediately
+      // instead; that's what the fallback chain is for.
+      if (status === 429) {
+        console.log(`[${provider.name}] Rate limited -- skipping retries, failing over.`);
+        throw err;
+      }
+
+      // Same logic for a timeout: retrying the SAME provider that just proved too slow burns
+      // budget for no benefit -- fail over immediately instead.
+      if (err instanceof Error && err.name === "TimeoutError") {
+        console.log(`[${provider.name}] Timed out -- skipping retries, failing over.`);
         throw err;
       }
 
       if (attempt < maxRetries - 1) {
-        // A per-minute/short-window 429 usually reports an exact wait time -- Groq as prose
-        // ("please try again in Xs"), OpenRouter as a JSON field ("retry_after_seconds": N). A
-        // fixed exponential backoff (capped at 10s) almost never waits long enough to clear
-        // either, so honor whichever hint is present instead of guessing.
-        const retryHintMatch =
-          errorMsg.match(/try again in ([\d.]+)s/i) ?? errorMsg.match(/"retry_after_seconds":\s*([\d.]+)/i);
-        const waitTime =
-          status === 429 && retryHintMatch
-            ? Math.min(Math.ceil(parseFloat(retryHintMatch[1]) * 1000) + 500, 45000)
-            : Math.min(1000 * Math.pow(2, attempt), 10000);
+        // Non-429 errors (network blips, 5xx) get a short, capped backoff -- long enough to
+        // smooth over a transient failure, short enough to stay well inside the function timeout.
+        const waitTime = Math.min(500 * Math.pow(2, attempt), 2000);
         console.log(`[${provider.name}] Waiting ${waitTime}ms before retry...`);
         await new Promise((resolve) => setTimeout(resolve, waitTime));
       } else {
@@ -485,12 +494,17 @@ async function callLLMWithFallback(
   providers: LLMProvider[],
   messages: ConversationMessage[],
   system: string,
-  tools: ReturnType<typeof buildToolsParam>
+  tools: ReturnType<typeof buildToolsParam>,
+  deadlineAt: number
 ): Promise<AssistantTurn & { provider: string }> {
   let lastError: unknown;
   for (const provider of providers) {
+    if (deadlineAt - Date.now() <= 500) {
+      lastError = new Error("Request deadline exceeded before all providers could be tried.");
+      break;
+    }
     try {
-      const turn = await callChatCompletionsWithRetry(provider, messages, system, tools);
+      const turn = await callChatCompletionsWithRetry(provider, messages, system, tools, deadlineAt);
       return { ...turn, provider: provider.name };
     } catch (err) {
       lastError = err;
@@ -543,6 +557,13 @@ export async function POST(req: NextRequest) {
 
   const toolCallLog: { name: string; args: unknown; result: unknown }[] = [];
   const tools = buildToolsParam();
+  // Netlify (and most serverless hosts) kill a function outright at a hard wall-clock limit,
+  // returning a bare 502 instead of letting our own error handling respond. A multi-tool
+  // conversation makes several sequential LLM round trips, so bound the WHOLE request -- not
+  // just a single call -- well under that limit, and bail into our own graceful message before
+  // the platform ever gets the chance to do it for us.
+  const REQUEST_DEADLINE_MS = 8000;
+  const deadlineAt = Date.now() + REQUEST_DEADLINE_MS;
 
   try {
     let finalText = "";
@@ -551,14 +572,22 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }));
 
+    let hitDeadline = false;
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+      if (Date.now() >= deadlineAt) {
+        console.log("[Tool Loop] Request deadline reached, stopping before another LLM call.");
+        hitDeadline = true;
+        break;
+      }
+
       console.log(`[Tool Loop] Iteration ${i + 1}/${MAX_TOOL_ITERATIONS}`);
 
       const { content, tool_calls: toolCalls, provider } = await callLLMWithFallback(
         providers,
         conversationMessages,
         SYSTEM_PROMPT,
-        tools
+        tools,
+        deadlineAt
       );
       console.log(`[Tool Loop] Served by ${provider}`);
       console.log(`[Tool Loop] Found ${toolCalls?.length ?? 0} tool calls`);
@@ -593,8 +622,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (!finalText) {
-      finalText =
-        "I wasn't able to finish that request after several tool calls -- try rephrasing or asking about one campaign at a time.";
+      finalText = hitDeadline
+        ? "That's taking longer than expected right now (the AI provider is responding slowly) -- please try again in a moment."
+        : "I wasn't able to finish that request after several tool calls -- try rephrasing or asking about one campaign at a time.";
     }
 
     return NextResponse.json({ message: finalText, toolResults: toolCallLog });

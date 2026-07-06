@@ -12,9 +12,15 @@ import { formatDate, MOCK_TODAY } from "@/lib/mock-data/mock-clock";
 
 export const runtime = "nodejs";
 
-const MODEL = "llama-3.3-70b-versatile";
-const MAX_TOOL_ITERATIONS = 10;
+const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+// Free-tier fallback for when Groq's per-minute/per-day quota is exhausted.
+// OpenRouter is also an OpenAI-compatible chat-completions API, so it reuses the same call path.
+const OPENROUTER_MODEL = "nvidia/nemotron-nano-9b-v2:free";
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+const MAX_TOOL_ITERATIONS = 10;
 
 const SYSTEM_PROMPT = `You are the Campaign Intelligence Assistant, an AI advisor for cross-platform
 ad campaigns running on Meta, LinkedIn, Google Ads, Taboola, and StackAdapt.
@@ -235,23 +241,17 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 ];
 
-/**
- * Human-readable labels used when injecting tool results back into the conversation, so the
- * model never sees (and can't echo back) a raw snake_case function name like "get_trend_analysis".
- */
-const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  list_tickets: "Campaign tickets",
-  get_campaign_performance: "Performance data",
-  get_trending_audience: "Trending audience signals",
-  recommend_initial_budget_split: "Initial budget split",
-  get_trend_analysis: "Trend comparison",
-  get_comparative_analysis: "Comparative (peer & cross-platform) analysis",
-  detect_anomalies: "Anomaly check",
-  detect_creative_fatigue: "Creative fatigue check",
-  get_pacing_status: "Pacing status",
-  recommend_budget_reallocation: "Budget reallocation recommendation",
-  suggest_audience_expansion: "Audience expansion suggestions",
-};
+/** Converts our internal tool definitions into the native OpenAI-style `tools` request param. */
+function buildToolsParam() {
+  return TOOL_DEFINITIONS.map((tool) => ({
+    type: "function" as const,
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }));
+}
 
 async function executeTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   try {
@@ -362,10 +362,23 @@ type ChatMessage = {
   content: string;
 };
 
+/** A single native tool call the model requested, as returned in `message.tool_calls[]`. */
+interface AssistantToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** The assistant/tool turns the tool loop accumulates, in the native OpenAI tool-calling shape. */
+type ConversationMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: AssistantToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
 function buildFallbackResponse(reason: string) {
   return NextResponse.json(
     {
-      message: `I couldn't reach Groq right now (${reason}). Please verify the server configuration or try again shortly.`,
+      message: `I couldn't reach an AI provider right now (${reason}). Please verify the server configuration or try again shortly.`,
       fallback: true,
       toolResults: [],
     },
@@ -373,77 +386,44 @@ function buildFallbackResponse(reason: string) {
   );
 }
 
-interface ToolCall {
+interface LLMProvider {
   name: string;
-  args: Record<string, unknown>;
+  url: string;
+  apiKey: string;
+  model: string;
+  extraHeaders?: Record<string, string>;
 }
 
-function buildSystemPrompt(): string {
-  const toolJson = TOOL_DEFINITIONS.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }));
-
-  return `${SYSTEM_PROMPT}
-
-When you need to call a tool, format it as valid JSON on its own line like this:
-<TOOL_CALL>
-{"name": "tool_name", "args": {"param": "value"}}
-</TOOL_CALL>
-
-Available tools:
-${JSON.stringify(toolJson, null, 2)}
-
-Always use these tools when needed to gather data before responding.`;
+interface AssistantTurn {
+  content: string | null;
+  tool_calls?: AssistantToolCall[];
 }
 
-function parseToolCalls(text: string): ToolCall[] {
-  const toolCalls: ToolCall[] = [];
-  const regex = /<TOOL_CALL>\n?([\s\S]*?)\n?<\/TOOL_CALL>/g;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      if (parsed.name && parsed.args) {
-        toolCalls.push(parsed);
-      }
-    } catch (e) {
-      console.error("Failed to parse tool call:", match[1], e);
-    }
-  }
-
-  return toolCalls;
-}
-
-function removeToolCallsFromText(text: string): string {
-  return text.replace(/<TOOL_CALL>\n?([\s\S]*?)\n?<\/TOOL_CALL>/g, "").trim();
-}
-
-async function callGroqWithRetry(
-  apiKey: string,
-  model: string,
-  messages: Array<{ role: string; content: string }>,
+async function callChatCompletionsWithRetry(
+  provider: LLMProvider,
+  messages: ConversationMessage[],
   system: string,
+  tools: ReturnType<typeof buildToolsParam>,
   maxRetries: number = 3
-): Promise<string> {
+): Promise<AssistantTurn> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      console.log(`[Groq API] Attempt ${attempt + 1}/${maxRetries} for model: ${model}`);
+      console.log(`[${provider.name}] Attempt ${attempt + 1}/${maxRetries} for model: ${provider.model}`);
 
       const payload = {
-        model,
+        model: provider.model,
         messages: [{ role: "system", content: system }, ...messages],
+        tools,
         max_tokens: 2048,
       };
 
       const response = await Promise.race([
-        fetch(GROQ_API_URL, {
+        fetch(provider.url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${provider.apiKey}`,
+            ...provider.extraHeaders,
           },
           body: JSON.stringify(payload),
         }),
@@ -454,33 +434,42 @@ async function callGroqWithRetry(
 
       if (!response.ok) {
         const errorText = await response.text();
-        const error = new Error(`Groq API error ${response.status}: ${errorText}`);
+        const error = new Error(`${provider.name} API error ${response.status}: ${errorText}`);
         (error as Error & { status?: number }).status = response.status;
         throw error;
       }
 
       const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string | null; tool_calls?: AssistantToolCall[] } }>;
       };
 
-      const text = data.choices?.[0]?.message?.content ?? "";
-      console.log("[Groq API] Success");
-      return text;
+      const message = data.choices?.[0]?.message;
+      console.log(`[${provider.name}] Success`);
+      return { content: message?.content ?? null, tool_calls: message?.tool_calls };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[Groq API] Attempt ${attempt + 1} failed:`, errorMsg);
+      const status = (err as Error & { status?: number }).status;
+      console.error(`[${provider.name}] Attempt ${attempt + 1} failed:`, errorMsg);
+
+      // A daily-quota 429 (e.g. Groq's "tokens per day (TPD)") won't clear for hours -- retrying
+      // just burns ~90s before falling back to the next provider for nothing. Fail fast instead.
+      if (status === 429 && /per day|\(TPD\)/i.test(errorMsg)) {
+        console.log(`[${provider.name}] Daily quota exhausted -- skipping retries, failing over.`);
+        throw err;
+      }
 
       if (attempt < maxRetries - 1) {
-        // Groq's 429s report an exact "please try again in Xs" -- a fixed exponential
-        // backoff (capped at 10s) almost never waits long enough to clear a TPM rate limit,
-        // so honor the hint when present instead of guessing.
-        const status = (err as Error & { status?: number }).status;
-        const retryHintMatch = errorMsg.match(/try again in ([\d.]+)s/i);
+        // A per-minute/short-window 429 usually reports an exact wait time -- Groq as prose
+        // ("please try again in Xs"), OpenRouter as a JSON field ("retry_after_seconds": N). A
+        // fixed exponential backoff (capped at 10s) almost never waits long enough to clear
+        // either, so honor whichever hint is present instead of guessing.
+        const retryHintMatch =
+          errorMsg.match(/try again in ([\d.]+)s/i) ?? errorMsg.match(/"retry_after_seconds":\s*([\d.]+)/i);
         const waitTime =
           status === 429 && retryHintMatch
             ? Math.min(Math.ceil(parseFloat(retryHintMatch[1]) * 1000) + 500, 45000)
             : Math.min(1000 * Math.pow(2, attempt), 10000);
-        console.log(`[Groq API] Waiting ${waitTime}ms before retry...`);
+        console.log(`[${provider.name}] Waiting ${waitTime}ms before retry...`);
         await new Promise((resolve) => setTimeout(resolve, waitTime));
       } else {
         throw err;
@@ -488,17 +477,60 @@ async function callGroqWithRetry(
     }
   }
 
-  throw new Error("Max retries exceeded");
+  throw new Error(`${provider.name}: max retries exceeded`);
+}
+
+/** Tries each provider in order, falling over to the next one only once the current one's own retries are exhausted. */
+async function callLLMWithFallback(
+  providers: LLMProvider[],
+  messages: ConversationMessage[],
+  system: string,
+  tools: ReturnType<typeof buildToolsParam>
+): Promise<AssistantTurn & { provider: string }> {
+  let lastError: unknown;
+  for (const provider of providers) {
+    try {
+      const turn = await callChatCompletionsWithRetry(provider, messages, system, tools);
+      return { ...turn, provider: provider.name };
+    } catch (err) {
+      lastError = err;
+      console.error(`[LLM Fallback] ${provider.name} failed.`, err instanceof Error ? err.message : err);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("All configured LLM providers failed");
 }
 
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) {
-    return buildFallbackResponse("GROQ_API_KEY is not configured on the server");
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
+
+  const providers: LLMProvider[] = [];
+  if (groqKey) {
+    providers.push({ name: "Groq", url: GROQ_API_URL, apiKey: groqKey, model: GROQ_MODEL });
+  }
+  if (openRouterKey) {
+    providers.push({
+      name: "OpenRouter",
+      url: OPENROUTER_API_URL,
+      apiKey: openRouterKey,
+      model: OPENROUTER_MODEL,
+      // Optional but recommended by OpenRouter for their request-attribution dashboard.
+      extraHeaders: {
+        "HTTP-Referer": "https://campaign-intelligence-assistant.local",
+        "X-Title": "Campaign Intelligence Assistant",
+      },
+    });
   }
 
-  console.log("[Groq Auth] API key found, length:", apiKey.length);
+  if (providers.length === 0) {
+    return buildFallbackResponse("Neither GROQ_API_KEY nor OPENROUTER_API_KEY is configured on the server");
+  }
+
+  console.log(
+    "[LLM Auth] Configured providers:",
+    providers.map((p) => p.name).join(" -> ")
+  );
 
   let messages: ChatMessage[];
   try {
@@ -509,57 +541,55 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  console.log("[Groq Client] Initialized for model:", MODEL);
-
   const toolCallLog: { name: string; args: unknown; result: unknown }[] = [];
+  const tools = buildToolsParam();
 
   try {
     let finalText = "";
-    const conversationMessages = [
-      ...messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
-    ];
+    const conversationMessages: ConversationMessage[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       console.log(`[Tool Loop] Iteration ${i + 1}/${MAX_TOOL_ITERATIONS}`);
-      
-      const assistantMessage = await callGroqWithRetry(
-        apiKey,
-        MODEL,
+
+      const { content, tool_calls: toolCalls, provider } = await callLLMWithFallback(
+        providers,
         conversationMessages,
-        buildSystemPrompt()
+        SYSTEM_PROMPT,
+        tools
       );
+      console.log(`[Tool Loop] Served by ${provider}`);
+      console.log(`[Tool Loop] Found ${toolCalls?.length ?? 0} tool calls`);
 
-      const toolCalls = parseToolCalls(assistantMessage);
-      console.log(`[Tool Parse] Found ${toolCalls.length} tool calls`);
-
-      if (toolCalls.length === 0) {
-        finalText = removeToolCallsFromText(assistantMessage);
+      if (!toolCalls || toolCalls.length === 0) {
+        finalText = content ?? "";
         console.log("[Tool Loop] No tool calls, breaking");
         break;
       }
 
-      conversationMessages.push({
-        role: "assistant",
-        content: assistantMessage,
-      });
-
-      const toolResults: string[] = [];
+      conversationMessages.push({ role: "assistant", content, tool_calls: toolCalls });
 
       for (const toolCall of toolCalls) {
-        const result = await executeTool(toolCall.name, toolCall.args);
-        const output = "output" in result ? result.output : result;
-        toolCallLog.push({ name: toolCall.name, args: toolCall.args, result: output });
-        const label = TOOL_DISPLAY_NAMES[toolCall.name] ?? toolCall.name;
-        toolResults.push(`${label}:\n${JSON.stringify(output)}`);
-      }
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(toolCall.function.arguments || "{}");
+        } catch (e) {
+          console.error("Failed to parse tool call arguments:", toolCall.function.arguments, e);
+          args = {};
+        }
 
-      conversationMessages.push({
-        role: "user",
-        content: `Tool results:\n${toolResults.join("\n\n")}`,
-      });
+        const result = await executeTool(toolCall.function.name, args);
+        const output = "output" in result ? result.output : result;
+        toolCallLog.push({ name: toolCall.function.name, args, result: output });
+
+        conversationMessages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(output),
+        });
+      }
     }
 
     if (!finalText) {
@@ -571,21 +601,22 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorString = JSON.stringify(err, Object.getOwnPropertyNames(err));
-    
-    console.error("[Groq Error] Exception occurred:");
-    console.error("[Groq Error] Message:", errorMessage);
-    console.error("[Groq Error] Full:", errorString);
+    const providerNames = providers.map((p) => p.name).join(" and ");
 
-    let userFriendlyMessage = "I couldn't reach Groq right now. ";
+    console.error("[LLM Error] Exception occurred:");
+    console.error("[LLM Error] Message:", errorMessage);
+    console.error("[LLM Error] Full:", errorString);
+
+    let userFriendlyMessage = `I couldn't reach any AI provider right now (tried ${providerNames}). `;
 
     if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
-      userFriendlyMessage += "Your GROQ_API_KEY is invalid or expired.";
+      userFriendlyMessage += "The last provider tried reported an invalid or expired API key.";
     } else if (errorMessage.includes("429") || errorMessage.includes("rate")) {
-      userFriendlyMessage += "Rate limited - wait a moment and try again.";
+      userFriendlyMessage += "All configured providers are currently rate limited - wait a moment and try again.";
     } else if (errorMessage.includes("Model not found")) {
-      userFriendlyMessage += `Model "${MODEL}" is not available for your API configuration.`;
+      userFriendlyMessage += "The configured model is not available for that provider's API key.";
     } else if (errorMessage.includes("timeout") || errorMessage.includes("Timeout")) {
-      userFriendlyMessage += "Request timed out. Try again in 30 seconds.";
+      userFriendlyMessage += "The request timed out. Try again in 30 seconds.";
     } else if (errorMessage.includes("fetch") || errorMessage.includes("ECONNREFUSED")) {
       userFriendlyMessage += "Network error - check your internet connection and firewall.";
     } else {

@@ -20,6 +20,12 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const OPENROUTER_MODEL = "nvidia/nemotron-nano-9b-v2:free";
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+// Second fallback, tried when both Groq and OpenRouter are exhausted. NVIDIA's own NIM API
+// (build.nvidia.com) has a quota entirely separate from OpenRouter's account-wide free-tier cap,
+// so it gives genuine extra headroom rather than sharing an already-exhausted pool.
+const NVIDIA_MODEL = "meta/llama-3.1-70b-instruct";
+const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+
 const MAX_TOOL_ITERATIONS = 10;
 
 const SYSTEM_PROMPT = `You are the Campaign Intelligence Assistant, an AI advisor for cross-platform
@@ -518,6 +524,7 @@ async function callLLMWithFallback(
 export async function POST(req: NextRequest) {
   const groqKey = process.env.GROQ_API_KEY?.trim();
   const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
+  const nvidiaKey = process.env.NVIDIA_API_KEY?.trim();
 
   const providers: LLMProvider[] = [];
   if (groqKey) {
@@ -536,9 +543,12 @@ export async function POST(req: NextRequest) {
       },
     });
   }
+  if (nvidiaKey) {
+    providers.push({ name: "NVIDIA", url: NVIDIA_API_URL, apiKey: nvidiaKey, model: NVIDIA_MODEL });
+  }
 
   if (providers.length === 0) {
-    return buildFallbackResponse("Neither GROQ_API_KEY nor OPENROUTER_API_KEY is configured on the server");
+    return buildFallbackResponse("None of GROQ_API_KEY, OPENROUTER_API_KEY, or NVIDIA_API_KEY is configured on the server");
   }
 
   console.log(
@@ -562,7 +572,7 @@ export async function POST(req: NextRequest) {
   // conversation makes several sequential LLM round trips, so bound the WHOLE request -- not
   // just a single call -- well under that limit, and bail into our own graceful message before
   // the platform ever gets the chance to do it for us.
-  const REQUEST_DEADLINE_MS = 8000;
+  const REQUEST_DEADLINE_MS = 20000;
   const deadlineAt = Date.now() + REQUEST_DEADLINE_MS;
 
   try {
@@ -582,13 +592,26 @@ export async function POST(req: NextRequest) {
 
       console.log(`[Tool Loop] Iteration ${i + 1}/${MAX_TOOL_ITERATIONS}`);
 
-      const { content, tool_calls: toolCalls, provider } = await callLLMWithFallback(
-        providers,
-        conversationMessages,
-        SYSTEM_PROMPT,
-        tools,
-        deadlineAt
-      );
+      let content: string | null;
+      let toolCalls: AssistantToolCall[] | undefined;
+      let provider: string;
+      try {
+        const turn = await callLLMWithFallback(providers, conversationMessages, SYSTEM_PROMPT, tools, deadlineAt);
+        content = turn.content;
+        toolCalls = turn.tool_calls;
+        provider = turn.provider;
+      } catch (err) {
+        // Every provider failed for this iteration (most likely the deadline was hit mid-call).
+        // If we've already gathered real tool results, showing those beats discarding them for
+        // a bare apology -- only bail to the generic total-failure message with nothing to show.
+        if (toolCallLog.length === 0) throw err;
+        console.log(
+          "[Tool Loop] LLM call failed with partial progress already made -- returning partial results.",
+          err instanceof Error ? err.message : err
+        );
+        hitDeadline = true;
+        break;
+      }
       console.log(`[Tool Loop] Served by ${provider}`);
       console.log(`[Tool Loop] Found ${toolCalls?.length ?? 0} tool calls`);
 
@@ -622,9 +645,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (!finalText) {
-      finalText = hitDeadline
-        ? "That's taking longer than expected right now (the AI provider is responding slowly) -- please try again in a moment."
-        : "I wasn't able to finish that request after several tool calls -- try rephrasing or asking about one campaign at a time.";
+      if (hitDeadline && toolCallLog.length > 0) {
+        finalText =
+          "That's taking longer than expected, so here's what I found before the AI provider slowed down -- ask a follow-up if you need the rest.";
+      } else if (hitDeadline) {
+        finalText = "That's taking longer than expected right now (the AI provider is responding slowly) -- please try again in a moment.";
+      } else {
+        finalText = "I wasn't able to finish that request after several tool calls -- try rephrasing or asking about one campaign at a time.";
+      }
     }
 
     return NextResponse.json({ message: finalText, toolResults: toolCallLog });

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { getTrendAnalysis } from "./trend-analysis";
+import { getTrendAnalysis, TrendAnalysisResult } from "./trend-analysis";
 import { formatDate, addDays, MOCK_TODAY } from "./mock-data/mock-clock";
+
+/** All campaigns under test here are daily-row mock data, so a full result is always expected. */
+function expectFullResult(result: Awaited<ReturnType<typeof getTrendAnalysis>>): TrendAnalysisResult {
+  if (!result || "insufficientDailyData" in result) {
+    throw new Error(`Expected a full trend result, got: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
 
 describe("getTrendAnalysis", () => {
   it("returns null for a new (not-yet-live) campaign", async () => {
@@ -8,12 +16,12 @@ describe("getTrendAnalysis", () => {
   });
 
   it("defaults to trailing 7 days vs. the 7 days before that", async () => {
-    const result = await getTrendAnalysis("10101");
-    expect(result!.currentPeriod).toEqual({
+    const result = expectFullResult(await getTrendAnalysis("10101"));
+    expect(result.currentPeriod).toEqual({
       start: formatDate(addDays(MOCK_TODAY, -7)),
       end: formatDate(addDays(MOCK_TODAY, -1)),
     });
-    expect(result!.priorPeriod).toEqual({
+    expect(result.priorPeriod).toEqual({
       start: formatDate(addDays(MOCK_TODAY, -14)),
       end: formatDate(addDays(MOCK_TODAY, -8)),
     });
@@ -26,26 +34,26 @@ describe("getTrendAnalysis", () => {
       priorStart: "2026-05-25",
       priorEnd: "2026-05-31",
     };
-    const result = await getTrendAnalysis("10101", period);
-    expect(result!.currentPeriod).toEqual({ start: period.currentStart, end: period.currentEnd });
-    expect(result!.priorPeriod).toEqual({ start: period.priorStart, end: period.priorEnd });
+    const result = expectFullResult(await getTrendAnalysis("10101", period));
+    expect(result.currentPeriod).toEqual({ start: period.currentStart, end: period.currentEnd });
+    expect(result.priorPeriod).toEqual({ start: period.priorStart, end: period.priorEnd });
   });
 
   it("surfaces the seeded overspend on 10102/GOOGLE as a meaningful spend increase in the default window", async () => {
-    const result = await getTrendAnalysis("10102");
-    const googleSpend = result!.byPlatform.find((p) => p.platform === "GOOGLE")!.metrics.find((m) => m.metric === "Spend")!;
+    const result = expectFullResult(await getTrendAnalysis("10102"));
+    const googleSpend = result.byPlatform.find((p) => p.platform === "GOOGLE")!.metrics.find((m) => m.metric === "Spend")!;
     expect(googleSpend.direction).toBe("up");
     expect(googleSpend.isMeaningful).toBe(true);
   });
 
   it("omits the video engagement metric from the combined bucket but includes it per platform", async () => {
-    const result = await getTrendAnalysis("10109");
-    const combinedMetricNames = result!.combined.map((m) => m.metric);
+    const result = expectFullResult(await getTrendAnalysis("10109"));
+    const combinedMetricNames = result.combined.map((m) => m.metric);
     expect(combinedMetricNames.some((m) => m.toLowerCase().includes("video") || m.toLowerCase().includes("thruplay"))).toBe(
       false
     );
 
-    const metaMetricNames = result!.byPlatform.find((p) => p.platform === "META")!.metrics.map((m) => m.metric);
+    const metaMetricNames = result.byPlatform.find((p) => p.platform === "META")!.metrics.map((m) => m.metric);
     expect(metaMetricNames).toContain("3-Second Video Views");
   });
 

@@ -1,5 +1,5 @@
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Card, CardTitle, CrossPlatformCallout, PlatformBadge } from "./primitives";
+import { Card, CardHeading, CrossPlatformCallout, PlatformBadge, SectionLabel } from "./primitives";
 import { CHART_COLORS } from "./chart-theme";
 
 interface PeerComparisonFinding {
@@ -78,19 +78,24 @@ function PeerComparisonChart({ comparisons }: { comparisons: PeerComparisonFindi
   );
 }
 
-export function ComparativeAnalysisCard({ comparison }: { comparison: ComparativeAnalysisResult }) {
+/** @param bare Skips the card shell and heading -- used when composed inside a unified panel (see PanelSection) that already provides both. */
+export function ComparativeAnalysisCard({
+  comparison,
+  bare = false,
+}: {
+  comparison: ComparativeAnalysisResult;
+  bare?: boolean;
+}) {
   const hasAny = comparison.peerComparisons.length > 0 || comparison.crossPlatformComparisons.length > 0;
   if (!hasAny) return null;
 
-  return (
-    <Card className="max-w-2xl">
-      <CardTitle>Campaign #{comparison.campaignId} -- Comparative (&ldquo;Moat&rdquo;) Analysis</CardTitle>
+  const content = (
+    <>
+      {!bare && <CardHeading campaignId={comparison.campaignId} title={<>Comparative (&ldquo;Moat&rdquo;) Analysis</>} />}
 
       {comparison.crossPlatformComparisons.length > 0 && (
         <div className="mb-4 flex flex-col gap-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            This platform vs. the rest of this campaign
-          </div>
+          <SectionLabel>This platform vs. the rest of this campaign</SectionLabel>
           {comparison.crossPlatformComparisons.map((c) => (
             <CrossPlatformCallout key={c.platform}>
               <div className="mb-1 flex items-center gap-1.5">
@@ -107,9 +112,7 @@ export function ComparativeAnalysisCard({ comparison }: { comparison: Comparativ
 
       {comparison.peerComparisons.length > 0 && (
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            This campaign vs. peer campaigns
-          </div>
+          <SectionLabel>This campaign vs. peer campaigns</SectionLabel>
           <PeerComparisonChart comparisons={comparison.peerComparisons} />
           {comparison.peerComparisons.map((c, i) => (
             <div
@@ -117,7 +120,7 @@ export function ComparativeAnalysisCard({ comparison }: { comparison: Comparativ
               className={`rounded-lg border px-3 py-2 text-sm ${
                 c.isBetterThanPeers
                   ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30"
-                  : "border-zinc-100 dark:border-zinc-800"
+                  : "border-zinc-200 dark:border-zinc-800"
               }`}
             >
               <div className="mb-0.5 flex items-center gap-1.5">
@@ -129,6 +132,9 @@ export function ComparativeAnalysisCard({ comparison }: { comparison: Comparativ
           ))}
         </div>
       )}
-    </Card>
+    </>
   );
+
+  if (bare) return content;
+  return <Card className="max-w-2xl">{content}</Card>;
 }

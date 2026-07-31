@@ -1,6 +1,7 @@
 import { parseCampaignName } from "./parse-campaign-name";
 import { PLATFORM_KEYS, PLATFORM_TAB_LABEL, PREFIX_TO_PLATFORM, VIDEO_METRIC_LABEL } from "./platforms";
 import { generateMockPerformanceData, PerformanceRow } from "./mock-data/generate-performance-data";
+import { getSheetsClient } from "./google-sheets-client";
 
 export type { PerformanceRow };
 
@@ -37,8 +38,9 @@ class MockDataSource implements DataSource {
 }
 
 /**
- * Real Google Sheets implementation. Requires a service account with viewer access to the
- * spreadsheet, and the following env vars:
+ * Real Google Sheets implementation. Requires a service account with Editor access to the
+ * spreadsheet (uploaded campaigns are appended into these same tabs -- read-only isn't enough
+ * anymore), and the following env vars:
  *   GOOGLE_SHEETS_SPREADSHEET_ID
  *   GOOGLE_SERVICE_ACCOUNT_EMAIL
  *   GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
@@ -47,29 +49,12 @@ class MockDataSource implements DataSource {
  * [Video metric] | Start Date | End Date
  */
 class GoogleSheetsDataSource implements DataSource {
-  private rows: PerformanceRow[] | null = null;
-
   private async load(): Promise<PerformanceRow[]> {
-    if (this.rows) return this.rows;
-
-    const { google } = await import("googleapis");
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, "\n");
-
-    if (!spreadsheetId || !clientEmail || !privateKey) {
-      throw new Error(
-        "Google Sheets data source is misconfigured: missing GOOGLE_SHEETS_SPREADSHEET_ID, " +
-          "GOOGLE_SERVICE_ACCOUNT_EMAIL, or GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY."
-      );
-    }
-
-    const auth = new google.auth.JWT({
-      email: clientEmail,
-      key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-    const sheets = google.sheets({ version: "v4", auth });
+    // Deliberately not cached: uploaded campaigns append rows into these same tabs via
+    // uploaded-campaign-store.ts, and under Turbopack each API route compiles as an isolated
+    // module graph -- a cached copy here would never see rows a *different* route just wrote.
+    // Always fetching live trades a bit of latency for correctness across routes.
+    const { sheets, spreadsheetId } = await getSheetsClient();
 
     const rows: PerformanceRow[] = [];
 
@@ -109,7 +94,6 @@ class GoogleSheetsDataSource implements DataSource {
       }
     }
 
-    this.rows = rows;
     return rows;
   }
 
@@ -128,6 +112,12 @@ class GoogleSheetsDataSource implements DataSource {
 
 let cachedSource: DataSource | null = null;
 
+/**
+ * No composite wrapper for uploads anymore -- uploaded-campaign-store.ts appends rows directly
+ * into these same platform tabs, so they're already included once USE_REAL_SHEETS is on. (Known
+ * limitation: uploads won't show up under MockDataSource, since mock mode has no connection to
+ * the real spreadsheet.)
+ */
 export function getDataSource(): DataSource {
   if (!cachedSource) {
     cachedSource =

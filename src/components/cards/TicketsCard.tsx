@@ -1,4 +1,4 @@
-import { Card, CardTitle, PlatformBadge, StatusBadge, formatCurrency } from "./primitives";
+import { Card, CardTitle, PlatformBadge, SectionLabel, StatusBadge, formatCurrency } from "./primitives";
 
 interface Ticket {
   campaignId: string;
@@ -31,18 +31,21 @@ export function TicketsCard({ tickets }: { tickets: Ticket[] }) {
 function TicketGroup({ title, tickets }: { title: string; tickets: Ticket[] }) {
   return (
     <div>
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+      <SectionLabel>
         {title} ({tickets.length})
-      </div>
+      </SectionLabel>
       <div className="flex flex-col gap-1.5">
         {tickets.map((t) => (
           <div
             key={t.campaignId}
-            className="flex flex-col gap-1 rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-800"
+            className="flex flex-col gap-1 rounded-lg border border-zinc-200 px-3 py-2 transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                #{t.campaignId} -- {t.campaignName}
+              <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                <span className="shrink-0 rounded-md bg-zinc-200 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                  #{t.campaignId}
+                </span>
+                <span className="truncate">{t.campaignName}</span>
               </span>
               <StatusBadge status={t.status} />
             </div>

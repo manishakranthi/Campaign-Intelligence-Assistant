@@ -1,13 +1,23 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Switch `dark:` from the prefers-color-scheme media query to a `.dark` class on <html>, toggled
+   by ThemeToggle.tsx and set on first paint by the inline script in layout.tsx (no flash). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* A deeper warm-taupe canvas (not stark white, and not the near-white cream this used to be) so
+     crisp white cards actually separate from the page instead of blending into it. */
+  --background: #eae7dd;
+  --foreground: #1c1c1e;
+  --surface: #ffffff;
+  --surface-border: #cfd6cf;
 
   /* Brand accent -- teal, distinct from every platform/status semantic color used elsewhere. */
   --accent: #0d9488;
   --accent-foreground: #ffffff;
+  --accent-soft: #0d948829;
+  --accent-shadow: rgba(13, 148, 136, 0.22);
 
   /* Chart colors (referenced as plain strings from chart-theme.ts -- Recharts doesn't see Tailwind classes). */
   --chart-positive: #10b981;
@@ -15,35 +25,82 @@
   --chart-neutral: #a1a1aa;
   --chart-accent: #0d9488;
   --chart-grid: #e4e4e7;
+
+  /* Second body glow stop -- light mode only, see body{} below. Dark mode zeroes this out to keep
+     its existing single-glow look unchanged. */
+  --body-glow-2: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-border: var(--surface-border);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+.dark {
+  --background: #09090b;
+  --foreground: #f1f1f0;
+  --surface: #131315;
+  --surface-border: #232326;
 
-    --accent: #2dd4bf;
-    --accent-foreground: #0a0a0a;
+  --accent: #2dd4bf;
+  --accent-foreground: #082f2b;
+  --accent-soft: #2dd4bf1f;
+  --accent-shadow: rgba(45, 212, 191, 0.12);
 
-    --chart-positive: #34d399;
-    --chart-negative: #fb7185;
-    --chart-neutral: #71717a;
-    --chart-accent: #2dd4bf;
-    --chart-grid: #3f3f46;
-  }
+  --chart-positive: #34d399;
+  --chart-negative: #fb7185;
+  --chart-neutral: #71717a;
+  --chart-accent: #2dd4bf;
+  --chart-grid: #3f3f46;
+
+  /* Keeps dark mode's original single-glow background -- the second wash is a light-mode fix. */
+  --body-glow-2: transparent;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
+  /* Teal glow from the top-left plus a second warm wash from the bottom-right -- a single faint
+     radial on a near-white canvas was reading as flat/washed out. */
+  background-image:
+    radial-gradient(1300px circle at 10% -10%, var(--accent-soft), transparent 60%),
+    radial-gradient(900px circle at 95% 110%, var(--body-glow-2), transparent 55%);
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Slim, understated scrollbars -- default browser scrollbars read as unfinished. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--surface-border);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--surface-border) 70%, var(--foreground));
 }

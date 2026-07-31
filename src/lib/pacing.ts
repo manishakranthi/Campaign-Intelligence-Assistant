@@ -94,11 +94,11 @@ export async function getPacingStatus(campaignId: string): Promise<PacingResult 
   let goalPacingDetail: string;
   if (shortfallPct > 0) {
     goalPacingDetail =
-      `Pacing to reach ${Math.round(projectedGoalAtFlightEnd).toLocaleString()} of your ${ticket.goalAmount.toLocaleString()} ` +
+      `Pacing to reach ${Math.round(projectedGoalAtFlightEnd).toLocaleString("en-US")} of your ${ticket.goalAmount.toLocaleString("en-US")} ` +
       `${metricLabel} goal by ${ticket.flightEndDate}, a ${shortfallPct.toFixed(0)}% shortfall at the current rate.`;
   } else {
     goalPacingDetail =
-      `Pacing to reach ${Math.round(projectedGoalAtFlightEnd).toLocaleString()} of your ${ticket.goalAmount.toLocaleString()} ` +
+      `Pacing to reach ${Math.round(projectedGoalAtFlightEnd).toLocaleString("en-US")} of your ${ticket.goalAmount.toLocaleString("en-US")} ` +
       `${metricLabel} goal by ${ticket.flightEndDate}, ${Math.abs(shortfallPct).toFixed(0)}% ahead of goal at the current rate.`;
   }
 

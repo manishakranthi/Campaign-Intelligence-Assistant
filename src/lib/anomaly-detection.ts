@@ -32,6 +32,21 @@ export interface AnomalyDetectionResult {
   crossPlatformFindings: CrossPlatformAnomalyFinding[];
 }
 
+/**
+ * Returned instead of a real (always-empty) result when the campaign doesn't have enough
+ * day-by-day history for trailing-average comparisons -- e.g. an uploaded campaign whose rows
+ * are whole-period aggregates. Every flag below already requires MIN_HISTORY days before
+ * evaluating anything, so this wouldn't produce a *wrong* answer without the guard, but a silent
+ * `findings: []` reads as "checked, found nothing" rather than "couldn't check" -- this makes
+ * that distinction explicit.
+ */
+export interface AnomalyDetectionInsufficientData {
+  campaignId: string;
+  insufficientDailyData: true;
+  distinctDates: number;
+  message: string;
+}
+
 const MIN_HISTORY = 7;
 
 function detectForPlatform(platform: PlatformKey, series: DailyMetrics[]): AnomalyFinding[] {
@@ -120,9 +135,26 @@ function detectForPlatform(platform: PlatformKey, series: DailyMetrics[]): Anoma
 }
 
 /** Live campaigns only: anomalies based on spend/CPM/CTR vs. each campaign's own trailing 7-day average. */
-export async function detectAnomalies(campaignId: string): Promise<AnomalyDetectionResult | null> {
+export async function detectAnomalies(
+  campaignId: string
+): Promise<AnomalyDetectionResult | AnomalyDetectionInsufficientData | null> {
   const performance = await getCampaignPerformance(campaignId);
   if (!performance) return null;
+
+  const distinctDates = new Set(
+    Object.values(performance.rowsByPlatform)
+      .flat()
+      .map((r) => r?.date)
+      .filter((d): d is string => Boolean(d))
+  ).size;
+  if (distinctDates < MIN_HISTORY) {
+    return {
+      campaignId,
+      insufficientDailyData: true,
+      distinctDates,
+      message: `This campaign has only ${distinctDates} distinct reporting date(s) in its performance data -- not enough day-by-day history to detect anomalies against a trailing average. Anomaly detection needs at least ${MIN_HISTORY} days of daily data.`,
+    };
+  }
 
   const allFindings: AnomalyFinding[] = [];
   for (const [platform, rows] of Object.entries(performance.rowsByPlatform)) {

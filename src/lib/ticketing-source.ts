@@ -1,5 +1,6 @@
 import { PlatformKey } from "./platforms";
 import { TICKETS_DATA } from "./mock-data/tickets";
+import { CompositeTicketingSource } from "./composite-ticketing-source";
 
 /**
  * Normalized ticket metadata as returned by any ticketing system implementation.
@@ -20,6 +21,14 @@ export interface TicketMetadata {
   goalAmount: number;
   vertical: string;
   platforms: PlatformKey[];
+  /**
+   * "daily" (the default, from the Google Sheet/mock data) means performance rows have one row
+   * per calendar day, enabling trend-over-time and anomaly detection. "aggregate" (uploaded
+   * campaigns) means rows are whole-period totals from a raw platform export -- performance
+   * summaries, comparative analysis, pacing, and budget reallocation all still work fine, but
+   * get_trend_analysis/detect_anomalies can't (see the distinct-date guard in those modules).
+   */
+  dataGranularity: "daily" | "aggregate";
 }
 
 export interface TicketingSource {
@@ -28,7 +37,7 @@ export interface TicketingSource {
 }
 
 function normalizeTicket(raw: (typeof TICKETS_DATA)[number]): TicketMetadata {
-  return { ...raw, campaignId: String(raw.campaignId) };
+  return { ...raw, campaignId: String(raw.campaignId), dataGranularity: "daily" };
 }
 
 class MockTicketingSource implements TicketingSource {
@@ -49,7 +58,7 @@ let cachedSource: TicketingSource | null = null;
 
 export function getTicketingSource(): TicketingSource {
   if (!cachedSource) {
-    cachedSource = new MockTicketingSource();
+    cachedSource = new CompositeTicketingSource(new MockTicketingSource());
   }
   return cachedSource;
 }

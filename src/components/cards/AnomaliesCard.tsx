@@ -1,4 +1,4 @@
-import { Card, CardTitle, CrossPlatformCallout, PlatformBadge } from "./primitives";
+import { Card, CardHeading, CrossPlatformCallout, PlatformBadge } from "./primitives";
 
 interface AnomalyFinding {
   type: "overspend" | "underspend" | "cpm-spike" | "ctr-drop";
@@ -20,6 +20,12 @@ interface AnomalyDetectionResult {
   campaignId: string;
   findings: AnomalyFinding[];
   crossPlatformFindings: CrossPlatformAnomalyFinding[];
+}
+
+interface AnomalyDetectionInsufficientData {
+  campaignId: string;
+  insufficientDailyData: true;
+  message: string;
 }
 
 const TYPE_STYLES: Record<AnomalyFinding["type"], string> = {
@@ -50,13 +56,26 @@ function FindingBlock({ finding }: { finding: AnomalyFinding }) {
   );
 }
 
-export function AnomaliesCard({ anomalies }: { anomalies: AnomalyDetectionResult }) {
+export function AnomaliesCard({
+  anomalies,
+}: {
+  anomalies: AnomalyDetectionResult | AnomalyDetectionInsufficientData;
+}) {
+  if ("insufficientDailyData" in anomalies) {
+    return (
+      <Card className="max-w-2xl">
+        <CardHeading campaignId={anomalies.campaignId} title="Anomaly Detection" />
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">{anomalies.message}</p>
+      </Card>
+    );
+  }
+
   const hasAny = anomalies.findings.length > 0 || anomalies.crossPlatformFindings.length > 0;
   if (!hasAny) return null;
 
   return (
     <Card className="max-w-2xl">
-      <CardTitle>Campaign #{anomalies.campaignId} -- Anomaly Detection</CardTitle>
+      <CardHeading campaignId={anomalies.campaignId} title="Anomaly Detection" />
       <div className="flex flex-col gap-2">
         {anomalies.crossPlatformFindings.map((cf, i) => (
           <CrossPlatformCallout key={i}>

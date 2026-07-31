@@ -38,7 +38,22 @@ export interface TrendAnalysisPeriod {
   priorEnd: string;
 }
 
+/**
+ * Returned instead of a real comparison when the campaign's rows don't have enough day-by-day
+ * history to split into current/prior periods -- e.g. an uploaded campaign whose rows are
+ * whole-period aggregates rather than daily data. Without this guard, a custom `period` could
+ * put the campaign's one pseudo-date only in the "current" bucket and produce a fabricated
+ * "+Infinity%" trend, which is actively misleading rather than just unhelpful.
+ */
+export interface TrendAnalysisInsufficientData {
+  campaignId: string;
+  insufficientDailyData: true;
+  distinctDates: number;
+  message: string;
+}
+
 const MEANINGFUL_THRESHOLD_PCT = 15;
+const MIN_DISTINCT_DATES_FOR_TREND = 7;
 
 function buildComparison(metric: string, prior: number, current: number): MetricComparison {
   const pct = prior === 0 ? (current === 0 ? 0 : null) : Number((((current - prior) / prior) * 100).toFixed(1));
@@ -87,9 +102,24 @@ function aggregate(days: DailyMetrics[]) {
 export async function getTrendAnalysis(
   campaignId: string,
   period?: TrendAnalysisPeriod
-): Promise<TrendAnalysisResult | null> {
+): Promise<TrendAnalysisResult | TrendAnalysisInsufficientData | null> {
   const performance = await getCampaignPerformance(campaignId);
   if (!performance) return null;
+
+  const distinctDates = new Set(
+    Object.values(performance.rowsByPlatform)
+      .flat()
+      .map((r) => r?.date)
+      .filter((d): d is string => Boolean(d))
+  ).size;
+  if (distinctDates < MIN_DISTINCT_DATES_FOR_TREND) {
+    return {
+      campaignId,
+      insufficientDailyData: true,
+      distinctDates,
+      message: `This campaign has only ${distinctDates} distinct reporting date(s) in its performance data -- not enough day-by-day history to compare periods. Trend analysis needs at least ${MIN_DISTINCT_DATES_FOR_TREND} days of daily data.`,
+    };
+  }
 
   const currentPeriod: DateRange = period
     ? { start: period.currentStart, end: period.currentEnd }

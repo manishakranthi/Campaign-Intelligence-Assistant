@@ -1,4 +1,4 @@
-import { Card, CardTitle, formatCurrency, formatNumber, StatusBadge } from "./primitives";
+import { Card, CardHeading, formatCurrency, formatNumber, StatusBadge } from "./primitives";
 
 interface PacingResult {
   campaignId: string;
@@ -42,7 +42,7 @@ function PacingBar({
   const expectedPct = total > 0 ? Math.max(0, Math.min(100, (expected / total) * 100)) : 0;
 
   return (
-    <div className="relative h-2.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800">
+    <div className="relative h-2.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-800">
       <div className={`h-full rounded-full ${BAR_FILL[status]} transition-[width]`} style={{ width: `${actualPct}%` }} />
       <div
         className="absolute -top-0.5 h-[13px] w-0.5 rounded-full bg-zinc-500 dark:bg-zinc-300"
@@ -53,14 +53,26 @@ function PacingBar({
   );
 }
 
-export function PacingCard({ pacing }: { pacing: PacingResult }) {
-  return (
-    <Card className="max-w-2xl">
-      <CardTitle>
-        Campaign #{pacing.campaignId} -- Pacing ({pacing.daysElapsed}/{pacing.flightLengthDays} flight days elapsed)
-      </CardTitle>
+/** @param bare Skips the card shell and heading -- used when composed inside a unified panel (see PanelSection) that already provides both. */
+export function PacingCard({ pacing, bare = false }: { pacing: PacingResult; bare?: boolean }) {
+  const content = (
+    <>
+      {bare ? (
+        <div className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+          {pacing.daysElapsed}/{pacing.flightLengthDays} flight days elapsed
+        </div>
+      ) : (
+        <CardHeading
+          campaignId={pacing.campaignId}
+          title={
+            <>
+              Pacing ({pacing.daysElapsed}/{pacing.flightLengthDays} flight days elapsed)
+            </>
+          }
+        />
+      )}
       <div className="flex flex-col gap-3">
-        <div className="rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-800">
+        <div className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
               Budget: {formatCurrency(pacing.spendToDate)} of {formatCurrency(pacing.overallBudget)} spent
@@ -75,7 +87,7 @@ export function PacingCard({ pacing }: { pacing: PacingResult }) {
           />
           <p className="mt-1.5 text-sm text-zinc-700 dark:text-zinc-300">{pacing.spendPacingDetail}</p>
         </div>
-        <div className="rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-800">
+        <div className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-800">
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
               Goal: {formatNumber(pacing.goalToDate)} of {formatNumber(pacing.goalAmount)} {pacing.goalMetric}
@@ -91,6 +103,9 @@ export function PacingCard({ pacing }: { pacing: PacingResult }) {
           <p className="mt-1.5 text-sm text-zinc-700 dark:text-zinc-300">{pacing.goalPacingDetail}</p>
         </div>
       </div>
-    </Card>
+    </>
   );
+
+  if (bare) return content;
+  return <Card className="max-w-2xl">{content}</Card>;
 }

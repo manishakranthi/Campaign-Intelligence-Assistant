@@ -1,4 +1,4 @@
-import { Card, CardTitle, PlatformBadge } from "./primitives";
+import { Card, CardHeading, PlatformBadge } from "./primitives";
 
 interface FatigueFinding {
   platform: string;
@@ -24,7 +24,7 @@ export function CreativeFatigueCard({ fatigue }: { fatigue: CreativeFatigueResul
 
   return (
     <Card className="max-w-2xl">
-      <CardTitle>Campaign #{fatigue.campaignId} -- Creative Fatigue</CardTitle>
+      <CardHeading campaignId={fatigue.campaignId} title="Creative Fatigue" />
       <div className="flex flex-col gap-3">
         {fatigue.findings.map((f) => (
           <div

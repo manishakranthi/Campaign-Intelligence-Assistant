@@ -12,6 +12,10 @@ import { formatDate, MOCK_TODAY } from "@/lib/mock-data/mock-clock";
 
 export const runtime = "nodejs";
 
+// Primary provider -- tried first when configured.
+const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -88,6 +92,15 @@ what the user actually asked, but default to this order when the user wants a ge
 8. If the campaign is off-pace or under target vs. its goal, also call suggest_audience_expansion
    for new targeting angles from trending audience data -- not just "increase budget."
 
+If a ticket's dataGranularity (from list_tickets) is "aggregate" (a campaign created by uploading
+a raw platform export rather than daily sheet data), skip get_trend_analysis and detect_anomalies
+entirely -- they need day-by-day history this campaign doesn't have, and calling them just wastes
+a round trip before they report back that there's not enough daily data. Still run
+get_campaign_performance, get_comparative_analysis, get_pacing_status, and
+recommend_budget_reallocation as normal -- those work fine on whole-period totals. Treat any
+detect_creative_fatigue findings as best-effort/likely sparse for an aggregate campaign, not a
+sign the campaign has no creative fatigue issues.
+
 Close a full live-campaign analysis with a short, ranked list of the top 2-3 actions to take,
 not an equal-weight recap of every tool's output.
 
@@ -135,7 +148,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "get_trending_audience",
     description:
-      "Gets trending audience signals for a ticket's target audience: Google Trends interest-over-time and related queries, plus Meta Audience Insights (mocked) when Meta is one of the campaign's platforms. Used for new/pre-launch tickets, but works for any ticket.",
+      "Gets trending audience signals for a ticket's target audience: Google Trends interest-over-time and related queries, plus Meta interest-targeting audience-size data when Meta is one of the campaign's platforms. Used for new/pre-launch tickets, but works for any ticket.",
     parameters: {
       type: "object",
       properties: {
@@ -466,10 +479,11 @@ async function callChatCompletionsWithRetry(
       // Serverless functions run under a hard execution timeout (Netlify kills the invocation
       // outright, surfacing as a 502 to the client, not our graceful fallback JSON). A 429's
       // retry hint can be tens of seconds -- far longer than that budget -- so never block-and-
-      // retry the SAME provider on a rate limit. Fail over to the next provider immediately
-      // instead; that's what the fallback chain is for.
+      // retry the SAME provider on a rate limit (this also covers OpenAI's insufficient_quota,
+      // which comes back as a 429 and won't resolve itself no matter how long we wait). Fail
+      // over to the next provider immediately instead; that's what the fallback chain is for.
       if (status === 429) {
-        console.log(`[${provider.name}] Rate limited -- skipping retries, failing over.`);
+        console.log(`[${provider.name}] Rate limited/quota exceeded -- skipping retries, failing over.`);
         throw err;
       }
 
@@ -522,11 +536,17 @@ async function callLLMWithFallback(
 
 
 export async function POST(req: NextRequest) {
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
   const groqKey = process.env.GROQ_API_KEY?.trim();
   const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
   const nvidiaKey = process.env.NVIDIA_API_KEY?.trim();
 
+  // OpenAI is tried first (paid, most capable); Groq/OpenRouter/NVIDIA are free-tier fallbacks
+  // used automatically if OpenAI is unavailable, rate-limited, or out of quota.
   const providers: LLMProvider[] = [];
+  if (openaiKey) {
+    providers.push({ name: "OpenAI", url: OPENAI_API_URL, apiKey: openaiKey, model: OPENAI_MODEL });
+  }
   if (groqKey) {
     providers.push({ name: "Groq", url: GROQ_API_URL, apiKey: groqKey, model: GROQ_MODEL });
   }
@@ -548,7 +568,9 @@ export async function POST(req: NextRequest) {
   }
 
   if (providers.length === 0) {
-    return buildFallbackResponse("None of GROQ_API_KEY, OPENROUTER_API_KEY, or NVIDIA_API_KEY is configured on the server");
+    return buildFallbackResponse(
+      "None of OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, or NVIDIA_API_KEY is configured on the server"
+    );
   }
 
   console.log(
@@ -669,6 +691,8 @@ export async function POST(req: NextRequest) {
 
     if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
       userFriendlyMessage += "The last provider tried reported an invalid or expired API key.";
+    } else if (errorMessage.includes("insufficient_quota")) {
+      userFriendlyMessage += "The last provider tried is out of quota/billing credits.";
     } else if (errorMessage.includes("429") || errorMessage.includes("rate")) {
       userFriendlyMessage += "All configured providers are currently rate limited - wait a moment and try again.";
     } else if (errorMessage.includes("Model not found")) {
@@ -681,6 +705,9 @@ export async function POST(req: NextRequest) {
       userFriendlyMessage += errorMessage;
     }
 
-    return buildFallbackResponse(userFriendlyMessage);
+    // NextResponse.json directly here (not via buildFallbackResponse) -- userFriendlyMessage is
+    // already a complete, specific sentence; wrapping it in buildFallbackResponse's own generic
+    // template would double up the "I couldn't reach..." preamble.
+    return NextResponse.json({ message: userFriendlyMessage, fallback: true, toolResults: [] }, { status: 200 });
   }
 }

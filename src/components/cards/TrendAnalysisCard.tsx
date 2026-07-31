@@ -1,5 +1,5 @@
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Card, CardTitle, DirectionArrow, PlatformBadge } from "./primitives";
+import { Card, CardHeading, DataTable, DirectionArrow, PlatformBadge, SectionLabel } from "./primitives";
 import { CHART_COLORS } from "./chart-theme";
 
 interface MetricComparison {
@@ -19,8 +19,16 @@ interface TrendAnalysisResult {
   byPlatform: { platform: string; metrics: MetricComparison[] }[];
 }
 
+interface TrendAnalysisInsufficientData {
+  campaignId: string;
+  insufficientDailyData: true;
+  message: string;
+}
+
 function formatValue(value: number): string {
-  if (Number.isInteger(value)) return value.toLocaleString();
+  // Explicit locale -- see the comment on formatNumber in primitives.tsx for why "undefined" here
+  // caused a server/client hydration mismatch.
+  if (Number.isInteger(value)) return value.toLocaleString("en-US");
   return value.toFixed(2);
 }
 
@@ -75,24 +83,24 @@ function PercentChangeChart({ metrics }: { metrics: MetricComparison[] }) {
 
 function MetricTable({ metrics }: { metrics: MetricComparison[] }) {
   return (
-    <table className="w-full min-w-[420px] border-collapse text-xs">
+    <DataTable>
       <thead>
-        <tr className="border-b border-zinc-200 text-left text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-          <th className="py-1 pr-3 font-medium">Metric</th>
-          <th className="py-1 pr-3 font-medium">Prior</th>
-          <th className="py-1 pr-3 font-medium">Current</th>
-          <th className="py-1 pr-3 font-medium">Change</th>
+        <tr className="text-left">
+          <th className="py-2 pl-3 pr-3 font-medium">Metric</th>
+          <th className="py-2 pr-3 font-medium">Prior</th>
+          <th className="py-2 pr-3 font-medium">Current</th>
+          <th className="py-2 pr-3 font-medium">Change</th>
         </tr>
       </thead>
       <tbody>
         {metrics.map((m) => (
-          <tr key={m.metric} className="border-b border-zinc-100 dark:border-zinc-800">
-            <td className={`py-1 pr-3 ${m.isMeaningful ? "font-semibold text-zinc-900 dark:text-zinc-100" : "text-zinc-700 dark:text-zinc-300"}`}>
+          <tr key={m.metric}>
+            <td className={`py-2 pl-3 pr-3 ${m.isMeaningful ? "font-semibold text-zinc-900 dark:text-zinc-100" : "text-zinc-700 dark:text-zinc-300"}`}>
               {m.metric}
             </td>
-            <td className="py-1 pr-3 text-zinc-600 dark:text-zinc-400">{formatValue(m.prior)}</td>
-            <td className="py-1 pr-3 text-zinc-800 dark:text-zinc-200">{formatValue(m.current)}</td>
-            <td className="py-1 pr-3">
+            <td className="py-2 pr-3 text-zinc-600 tabular-nums dark:text-zinc-400">{formatValue(m.prior)}</td>
+            <td className="py-2 pr-3 text-zinc-800 tabular-nums dark:text-zinc-200">{formatValue(m.current)}</td>
+            <td className="py-2 pr-3 tabular-nums">
               <DirectionArrow direction={m.direction} />{" "}
               <span className={m.isMeaningful ? "font-semibold" : "text-zinc-500"}>
                 {m.percentChange === null ? "n/a" : `${m.percentChange >= 0 ? "+" : ""}${m.percentChange.toFixed(1)}%`}
@@ -101,32 +109,63 @@ function MetricTable({ metrics }: { metrics: MetricComparison[] }) {
           </tr>
         ))}
       </tbody>
-    </table>
+    </DataTable>
   );
 }
 
-export function TrendAnalysisCard({ trend }: { trend: TrendAnalysisResult }) {
-  return (
-    <Card className="max-w-2xl overflow-x-auto">
-      <CardTitle>
-        Campaign #{trend.campaignId} -- Trend: {trend.currentPeriod.start} to {trend.currentPeriod.end} vs.{" "}
-        {trend.priorPeriod.start} to {trend.priorPeriod.end}
-      </CardTitle>
-      <div className="mb-3">
-        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Combined
-        </div>
+/** @param bare Skips the card shell and heading -- used when composed inside a unified panel (see PanelSection) that already provides both. */
+export function TrendAnalysisCard({
+  trend,
+  bare = false,
+}: {
+  trend: TrendAnalysisResult | TrendAnalysisInsufficientData;
+  bare?: boolean;
+}) {
+  if ("insufficientDailyData" in trend) {
+    const message = <p className="text-sm text-zinc-600 dark:text-zinc-400">{trend.message}</p>;
+    if (bare) return message;
+    return (
+      <Card className="max-w-2xl">
+        <CardHeading campaignId={trend.campaignId} title="Trend Comparison" />
+        {message}
+      </Card>
+    );
+  }
+
+  const periodLabel = (
+    <>
+      {trend.currentPeriod.start} to {trend.currentPeriod.end} vs. {trend.priorPeriod.start} to{" "}
+      {trend.priorPeriod.end}
+    </>
+  );
+
+  const content = (
+    <>
+      {bare ? (
+        <div className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">{periodLabel}</div>
+      ) : (
+        <CardHeading campaignId={trend.campaignId} title={<>Trend: {periodLabel}</>} />
+      )}
+      <div className="mb-4">
+        <SectionLabel>Combined</SectionLabel>
         <PercentChangeChart metrics={trend.combined} />
         <MetricTable metrics={trend.combined} />
       </div>
       {trend.byPlatform.map((p) => (
-        <div key={p.platform} className="mb-3">
-          <div className="mb-1 flex items-center gap-2">
+        <div key={p.platform} className="mb-4 last:mb-0">
+          <div className="mb-1.5 flex items-center gap-2">
             <PlatformBadge platform={p.platform} />
           </div>
           <MetricTable metrics={p.metrics} />
         </div>
       ))}
+    </>
+  );
+
+  if (bare) return content;
+  return (
+    <Card className="max-w-2xl overflow-x-auto">
+      {content}
     </Card>
   );
 }

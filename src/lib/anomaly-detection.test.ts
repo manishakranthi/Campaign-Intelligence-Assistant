@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { detectAnomalies } from "./anomaly-detection";
+import { detectAnomalies, AnomalyDetectionResult } from "./anomaly-detection";
+
+/** All campaigns under test here are daily-row mock data, so a full result is always expected. */
+function expectFullResult(result: Awaited<ReturnType<typeof detectAnomalies>>): AnomalyDetectionResult {
+  if (!result || "insufficientDailyData" in result) {
+    throw new Error(`Expected a full anomaly detection result, got: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
 
 describe("detectAnomalies", () => {
   it("returns null for a new (not-yet-live) campaign", async () => {
@@ -7,24 +15,24 @@ describe("detectAnomalies", () => {
   });
 
   it("flags the seeded overspend event on 10102/GOOGLE", async () => {
-    const result = await detectAnomalies("10102");
-    const found = result!.findings.find((f) => f.type === "overspend" && f.platform === "GOOGLE");
+    const result = expectFullResult(await detectAnomalies("10102"));
+    const found = result.findings.find((f) => f.type === "overspend" && f.platform === "GOOGLE");
     expect(found).toBeDefined();
     expect(found!.days).toBeGreaterThanOrEqual(2);
   });
 
   it("flags the seeded underspend event on 10108/TABOOLA", async () => {
-    const result = await detectAnomalies("10108");
-    const found = result!.findings.find((f) => f.type === "underspend" && f.platform === "TABOOLA");
+    const result = expectFullResult(await detectAnomalies("10108"));
+    const found = result.findings.find((f) => f.type === "underspend" && f.platform === "TABOOLA");
     expect(found).toBeDefined();
     expect(found!.days).toBeGreaterThanOrEqual(2);
   });
 
   it("merges the seeded LinkedIn-cut / Meta-echo pair into one cross-platform finding on 10109", async () => {
-    const result = await detectAnomalies("10109");
-    expect(result!.crossPlatformFindings.length).toBeGreaterThanOrEqual(1);
+    const result = expectFullResult(await detectAnomalies("10109"));
+    expect(result.crossPlatformFindings.length).toBeGreaterThanOrEqual(1);
 
-    const linked = result!.crossPlatformFindings.find(
+    const linked = result.crossPlatformFindings.find(
       (f) => f.primary.platform === "LINKEDIN" && f.linked.platform === "META"
     );
     expect(linked).toBeDefined();
@@ -32,7 +40,7 @@ describe("detectAnomalies", () => {
     expect(linked!.daysBetween).toBeLessThanOrEqual(5);
 
     // The two merged findings should not also appear in the standalone findings list.
-    const standaloneHasLinkedInCut = result!.findings.some(
+    const standaloneHasLinkedInCut = result.findings.some(
       (f) => f.platform === "LINKEDIN" && f.type === "underspend"
     );
     expect(standaloneHasLinkedInCut).toBe(false);

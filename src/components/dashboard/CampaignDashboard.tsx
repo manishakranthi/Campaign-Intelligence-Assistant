@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- tool results are cast to each card's own shape by tool name, same convention as ToolResultCard */
-import { formatCurrency, formatNumber, formatPercent, StatTile } from "@/components/cards/primitives";
+import { Card, CardHeading, formatCurrency, formatNumber, formatPercent, PanelSection, PanelSectionList, StatTile } from "@/components/cards/primitives";
 import { PerformanceCard } from "@/components/cards/PerformanceCard";
 import { TrendAnalysisCard } from "@/components/cards/TrendAnalysisCard";
 import { ComparativeAnalysisCard } from "@/components/cards/ComparativeAnalysisCard";
@@ -32,15 +32,29 @@ export function CampaignDashboard({ campaignId, results }: { campaignId: string;
   const reallocation = byName.get("recommend_budget_reallocation");
   const expansion = byName.get("suggest_audience_expansion");
 
+  const hasComparative =
+    comparative && (comparative.peerComparisons.length > 0 || comparative.crossPlatformComparisons.length > 0);
+  const hasOverviewPanel = trend || hasComparative || pacing || reallocation;
+
   return (
-    <div className="flex w-full max-w-4xl flex-col gap-3">
-      <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-        Campaign #{campaignId} -- Analysis Dashboard
+    <div className="flex w-full max-w-4xl flex-col gap-4">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+            <path d="M8 1l1.2 3.8L13 6l-3.8 1.2L8 11l-1.2-3.8L3 6l3.8-1.2L8 1z" />
+          </svg>
+        </span>
+        <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+          Analysis Dashboard
+        </h2>
+        <span className="rounded-md bg-zinc-200 px-1.5 py-0.5 font-mono text-[11px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+          #{campaignId}
+        </span>
       </div>
 
       {performance && (
         <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-6">
             <StatTile label="Spend" value={formatCurrency(performance.combined.spend)} />
             <StatTile label="Impressions" value={formatNumber(performance.combined.impressions)} />
             <StatTile label="Clicks" value={formatNumber(performance.combined.clicks)} />
@@ -55,12 +69,33 @@ export function CampaignDashboard({ campaignId, results }: { campaignId: string;
         </>
       )}
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {trend && <TrendAnalysisCard trend={trend} />}
-        {comparative && <ComparativeAnalysisCard comparison={comparative} />}
-        {pacing && <PacingCard pacing={pacing} />}
-        {reallocation && <BudgetReallocationCard reallocation={reallocation} />}
-      </div>
+      {hasOverviewPanel && (
+        <Card className="max-w-4xl overflow-x-auto">
+          <CardHeading campaignId={campaignId} title="Trend, Comparative & Budget" />
+          <PanelSectionList>
+            {trend && (
+              <PanelSection title="Trend Comparison">
+                <TrendAnalysisCard trend={trend} bare />
+              </PanelSection>
+            )}
+            {hasComparative && (
+              <PanelSection title={<>Comparative (&ldquo;Moat&rdquo;) Analysis</>}>
+                <ComparativeAnalysisCard comparison={comparative} bare />
+              </PanelSection>
+            )}
+            {pacing && (
+              <PanelSection title="Pacing">
+                <PacingCard pacing={pacing} bare />
+              </PanelSection>
+            )}
+            {reallocation && (
+              <PanelSection title="Budget Reallocation">
+                <BudgetReallocationCard reallocation={reallocation} bare />
+              </PanelSection>
+            )}
+          </PanelSectionList>
+        </Card>
+      )}
 
       {anomalies && <AnomaliesCard anomalies={anomalies} />}
       {fatigue && <CreativeFatigueCard fatigue={fatigue} />}

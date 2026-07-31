@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PlatformBadge, formatCurrency } from "@/components/cards/primitives";
 
 interface Ticket {
@@ -20,16 +20,19 @@ export function TicketSidebar({
   onRunFullAnalysis,
   onGetAudienceIdeas,
   disabled,
+  refreshToken,
 }: {
   onRunFullAnalysis: (campaignId: string) => void;
   onGetAudienceIdeas: (campaignId: string) => void;
   disabled?: boolean;
+  /** Bump this (e.g. after a chat-driven upload completes) to force a refetch. */
+  refreshToken?: number;
 }) {
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadTickets = useCallback(() => {
     fetch("/api/tickets")
       .then((res) => {
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
@@ -39,12 +42,16 @@ export function TicketSidebar({
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load tickets."));
   }, []);
 
+  useEffect(() => {
+    loadTickets();
+  }, [loadTickets, refreshToken]);
+
   return (
-    <aside className="flex w-80 shrink-0 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3.5 dark:border-zinc-800">
-        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Campaigns</h2>
+    <aside className="flex w-80 shrink-0 flex-col border-r border-zinc-200 bg-surface dark:border-zinc-800">
+      <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3.5 dark:border-zinc-800">
+        <h2 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Campaigns</h2>
         {tickets && (
-          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
             {tickets.length}
           </span>
         )}
@@ -137,10 +144,10 @@ function TicketGroup({
           return (
             <div
               key={t.campaignId}
-              className={`rounded-xl border bg-white transition-all dark:bg-zinc-950 ${
+              className={`rounded-xl border bg-surface shadow-sm transition-all ${
                 isExpanded
-                  ? "border-accent/40 shadow-sm ring-1 ring-accent/15"
-                  : "border-zinc-100 hover:border-zinc-200 dark:border-zinc-800 dark:hover:border-zinc-700"
+                  ? "border-accent/40 shadow-[0_1px_2px_rgba(24,24,27,0.04),0_8px_20px_-12px_rgba(13,148,136,0.25)] ring-1 ring-accent/15"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
               }`}
             >
               <button
@@ -168,7 +175,7 @@ function TicketGroup({
                 </div>
               </button>
               {isExpanded && (
-                <div className="flex flex-col gap-2.5 border-t border-zinc-100 px-3 py-2.5 dark:border-zinc-800">
+                <div className="flex flex-col gap-2.5 border-t border-zinc-200 px-3 py-2.5 dark:border-zinc-800">
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <DetailStat label="Flight" value={`${t.flightStartDate} → ${t.flightEndDate}`} wide />
                     <DetailStat label="Budget" value={formatCurrency(t.overallBudget)} />
@@ -180,7 +187,7 @@ function TicketGroup({
                     onClick={() =>
                       t.status === "live" ? onRunFullAnalysis(t.campaignId) : onGetAudienceIdeas(t.campaignId)
                     }
-                    className="flex items-center justify-center gap-1.5 rounded-full bg-accent px-3 py-2 text-xs font-medium text-accent-foreground shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex items-center justify-center gap-1.5 rounded-full bg-accent px-3 py-2 text-xs font-medium text-accent-foreground shadow-sm shadow-accent/30 transition-all hover:-translate-y-px hover:shadow-md hover:shadow-accent/30 disabled:cursor-not-allowed disabled:translate-y-0 disabled:opacity-40 disabled:shadow-none"
                   >
                     <SparkleIcon />
                     {t.status === "live" ? "Run Full Analysis" : "Get Audience & Budget Ideas"}
@@ -197,7 +204,7 @@ function TicketGroup({
 
 function DetailStat({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className={`rounded-lg bg-zinc-50 px-2 py-1.5 dark:bg-zinc-900/60 ${wide ? "col-span-2" : ""}`}>
+    <div className={`rounded-lg bg-zinc-100 px-2 py-1.5 dark:bg-zinc-900/60 ${wide ? "col-span-2" : ""}`}>
       <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">{label}</div>
       <div className="mt-0.5 truncate text-xs font-medium text-zinc-700 dark:text-zinc-300">{value}</div>
     </div>

@@ -13,7 +13,17 @@ export interface GoogleTrendsResult {
   source: "live" | "fallback";
 }
 
-const GENERIC_MODIFIERS = ["best", "reviews", "near me", "discount code", "vs"];
+const GENERIC_MODIFIERS = [
+  "best",
+  "reviews",
+  "near me",
+  "discount code",
+  "vs",
+  "alternative",
+  "for beginners",
+  "coupon",
+  "comparison",
+];
 
 /**
  * Deterministic stand-in for a live Google Trends response, used when the real call fails
@@ -32,12 +42,7 @@ export function buildFallbackTrends(topic: string): GoogleTrendsResult {
     interestOverTime.push({ date, interest: Math.max(0, Math.min(100, Math.round(value))) });
   }
 
-  const topicWords = topic.toLowerCase().split(/\s+/).filter(Boolean);
-  const relatedQueries = [
-    `${topic} 2026`,
-    ...GENERIC_MODIFIERS.slice(0, 3).map((mod) => `${topic} ${mod}`),
-    topicWords.length > 1 ? topicWords[topicWords.length - 1] : `${topic} deals`,
-  ];
+  const relatedQueries = [`${topic} 2026`, ...GENERIC_MODIFIERS.map((mod) => `${topic} ${mod}`)];
 
   return { topic, interestOverTime, relatedQueries, source: "fallback" };
 }

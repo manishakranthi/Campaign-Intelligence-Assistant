@@ -19,8 +19,8 @@ interface MetaAudienceInsight {
 
 interface MetaAudienceInsightsResult {
   insights: MetaAudienceInsight[];
-  isMocked: true;
-  realIntegrationNote: string;
+  isMocked: boolean;
+  realIntegrationNote?: string;
 }
 
 interface TrendingAudienceResult {
@@ -44,7 +44,7 @@ export function TrendingAudienceCard({ audience }: { audience: TrendingAudienceR
         <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Google Trends (interest 0-100)
           {audience.googleTrends.source === "fallback" && (
-            <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-normal normal-case text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+            <span className="rounded-full bg-zinc-200 px-1.5 py-0.5 text-[10px] font-normal normal-case text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
               fallback data -- live call unavailable
             </span>
           )}
@@ -62,7 +62,7 @@ export function TrendingAudienceCard({ audience }: { audience: TrendingAudienceR
           {audience.googleTrends.relatedQueries.map((q) => (
             <span
               key={q}
-              className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
             >
               {q}
             </span>
@@ -74,9 +74,11 @@ export function TrendingAudienceCard({ audience }: { audience: TrendingAudienceR
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
             Meta Audience Insights
-            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-normal normal-case text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-              mocked
-            </span>
+            {audience.metaAudienceInsights.isMocked && (
+              <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-normal normal-case text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                mocked
+              </span>
+            )}
           </div>
           <ul className="mb-1.5 flex flex-col gap-1">
             {audience.metaAudienceInsights.insights.map((insight) => (
@@ -85,7 +87,9 @@ export function TrendingAudienceCard({ audience }: { audience: TrendingAudienceR
               </li>
             ))}
           </ul>
-          <p className="text-xs italic text-zinc-500 dark:text-zinc-500">{audience.metaAudienceInsights.realIntegrationNote}</p>
+          {audience.metaAudienceInsights.realIntegrationNote && (
+            <p className="text-xs italic text-zinc-500 dark:text-zinc-500">{audience.metaAudienceInsights.realIntegrationNote}</p>
+          )}
         </div>
       )}
     </Card>

@@ -1,6 +1,7 @@
 import { getDataSource, PerformanceRow } from "./data-source";
 import { PlatformKey } from "./platforms";
 import { getTicketingSource, TicketMetadata } from "./ticketing-source";
+import { daysBetween, MOCK_TODAY, parseDate } from "./mock-data/mock-clock";
 
 export type TicketStatus = "new" | "live";
 
@@ -61,7 +62,7 @@ export interface CampaignPerformance {
   rowsByPlatform: Partial<Record<PlatformKey, PerformanceRow[]>>;
 }
 
-function summarizePlatformRows(platform: PlatformKey, rows: PerformanceRow[]): PlatformPerformanceSummary {
+function summarizePlatformRows(platform: PlatformKey, rows: PerformanceRow[], days: number): PlatformPerformanceSummary {
   const spend = rows.reduce((sum, r) => sum + r.spend, 0);
   const impressions = rows.reduce((sum, r) => sum + r.impressions, 0);
   const clicks = rows.reduce((sum, r) => sum + r.clicks, 0);
@@ -82,13 +83,30 @@ function summarizePlatformRows(platform: PlatformKey, rows: PerformanceRow[]): P
     videoMetricTotal,
     videoMetricLabel: rows[0]?.videoMetricLabel ?? "",
     videoEngagementRate: impressions > 0 ? Number((videoMetricTotal / impressions).toFixed(4)) : 0,
-    days: new Set(rows.map((r) => r.date)).size,
+    days,
   };
+}
+
+/**
+ * Elapsed flight days as of MOCK_TODAY, clamped to the flight length -- the same formula
+ * pacing.ts uses for its own pro-rating math. Used (instead of counting distinct row-dates) so
+ * this is meaningful for both daily-row campaigns (where it's provably identical to the old
+ * distinct-date count, since that's exactly how many daily rows the mock generator produces) and
+ * aggregate/uploaded campaigns (whose rows don't carry one date per calendar day at all).
+ */
+function computeElapsedDays(ticket: TicketMetadata): number {
+  const flightStart = parseDate(ticket.flightStartDate);
+  const flightEnd = parseDate(ticket.flightEndDate);
+  const flightLengthDays = daysBetween(flightStart, flightEnd) + 1;
+  return Math.min(Math.max(daysBetween(flightStart, MOCK_TODAY), 0), flightLengthDays);
 }
 
 /** Aggregates a Campaign ID's rows across every platform tab it appears in. Live campaigns only. */
 export async function getCampaignPerformance(campaignId: string): Promise<CampaignPerformance | null> {
-  const rows = await getDataSource().getRowsForCampaign(campaignId);
+  const [rows, ticket] = await Promise.all([
+    getDataSource().getRowsForCampaign(campaignId),
+    getTicketingSource().getTicket(campaignId),
+  ]);
   if (rows.length === 0) return null;
 
   const rowsByPlatform: Partial<Record<PlatformKey, PerformanceRow[]>> = {};
@@ -99,8 +117,12 @@ export async function getCampaignPerformance(campaignId: string): Promise<Campai
     platformRows?.sort((a, b) => a.date.localeCompare(b.date));
   }
 
+  const days = ticket
+    ? computeElapsedDays(ticket)
+    : new Set(rows.map((r) => r.date)).size; // defensive fallback -- getRowsForCampaign returning rows implies a ticket should exist
+
   const platforms = Object.entries(rowsByPlatform).map(([platform, platformRows]) =>
-    summarizePlatformRows(platform as PlatformKey, platformRows ?? [])
+    summarizePlatformRows(platform as PlatformKey, platformRows ?? [], days)
   );
 
   const combinedSpend = platforms.reduce((sum, p) => sum + p.spend, 0);

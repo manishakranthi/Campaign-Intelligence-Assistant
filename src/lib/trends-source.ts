@@ -6,9 +6,9 @@ export type { GoogleTrendsResult, MetaAudienceInsight };
 export interface MetaAudienceInsightsResult {
   campaignId: string;
   insights: MetaAudienceInsight[];
-  isMocked: true;
-  /** What it would take to make this a real Meta Marketing API call instead of a mock. */
-  realIntegrationNote: string;
+  isMocked: boolean;
+  /** Only present when isMocked -- what it would take to make this a real Meta API call instead. */
+  realIntegrationNote?: string;
 }
 
 export interface TrendsSource {
@@ -83,7 +83,7 @@ class LiveTrendsSource implements TrendsSource {
         .flatMap((list) => list.rankedKeyword ?? [])
         .map((item) => item.query)
         .filter((query): query is string => Boolean(query))
-        .slice(0, 5);
+        .slice(0, 10);
 
       return { topic, interestOverTime, relatedQueries, source: "live" };
     } catch (err) {
@@ -93,6 +93,11 @@ class LiveTrendsSource implements TrendsSource {
   }
 
   async getMetaAudienceInsights(campaignId: string, vertical: string): Promise<MetaAudienceInsightsResult> {
+    const liveInsights = await this.fetchLiveMetaAudienceInsights(vertical);
+    if (liveInsights) {
+      return { campaignId, insights: liveInsights, isMocked: false };
+    }
+
     return {
       campaignId,
       insights: getMockMetaAudienceInsights(vertical),
@@ -100,6 +105,55 @@ class LiveTrendsSource implements TrendsSource {
       realIntegrationNote: META_INTEGRATION_NOTE,
     };
   }
+
+  /**
+   * The classic Meta "Audience Insights" product was deprecated in 2021 -- the modern equivalent
+   * for a not-yet-live campaign (no delivery data of its own to break down) is the ad-interest
+   * targeting search endpoint, which returns real named interests and their live audience-size
+   * estimates for a given keyword. It doesn't need an ad account ID, just a token with ads_read.
+   */
+  private async fetchLiveMetaAudienceInsights(vertical: string): Promise<MetaAudienceInsight[] | null> {
+    const accessToken = process.env.META_ACCESS_TOKEN?.trim();
+    if (!accessToken) return null;
+
+    const query = vertical.split("/")[0].trim();
+
+    try {
+      const url = new URL("https://graph.facebook.com/v21.0/search");
+      url.searchParams.set("type", "adinterest");
+      url.searchParams.set("q", query);
+      url.searchParams.set("limit", "10");
+      url.searchParams.set("access_token", accessToken);
+
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) {
+        console.warn(`fetchLiveMetaAudienceInsights: Graph API error ${res.status} for "${query}"`);
+        return null;
+      }
+
+      const json = (await res.json()) as {
+        data?: Array<{ name: string; audience_size_lower_bound?: number; audience_size_upper_bound?: number }>;
+      };
+      const interests = json.data ?? [];
+      if (interests.length === 0) return null;
+
+      return interests.map((interest) => ({
+        label: interest.name,
+        detail: `Estimated reach: ${formatAudienceSize(interest.audience_size_lower_bound)}-${formatAudienceSize(interest.audience_size_upper_bound)} people`,
+      }));
+    } catch (err) {
+      console.warn(`fetchLiveMetaAudienceInsights: live call failed for "${query}".`, err);
+      return null;
+    }
+  }
+}
+
+function formatAudienceSize(n: number | undefined): string {
+  if (!n) return "?";
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
 }
 
 let cachedSource: TrendsSource | null = null;

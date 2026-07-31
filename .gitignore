@@ -43,3 +43,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# real ad-platform export files dropped in the project root for local testing -- not app code,
+# and may contain real advertiser/campaign data. Test fixtures live in
+# src/lib/upload-parsers/__fixtures__/ instead and are tracked normally.
+/*.csv
+/*.xlsx

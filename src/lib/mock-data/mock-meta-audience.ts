@@ -140,7 +140,30 @@ const DEFAULT_PROFILE: MetaAudienceInsight[] = [
   { label: "Lookalike opportunity", detail: "1% lookalike of site visitors or past purchasers" },
 ];
 
+/**
+ * Generic, vertical-agnostic insights appended after a profile's own (higher-signal) entries so
+ * every mocked response reaches at least 10 -- matching what the live Meta interest-search
+ * endpoint typically returns, rather than the handful of hand-picked entries per profile.
+ */
+const GENERIC_FILLER_INSIGHTS: MetaAudienceInsight[] = [
+  { label: "Platform split", detail: "Instagram placements slightly outindex Facebook for this audience" },
+  { label: "Time of day skew", detail: "Evenings (6-10pm local) show the strongest engagement window" },
+  { label: "Creative format", detail: "Short-form video (Reels) outperforms static images on reach efficiency" },
+  { label: "Frequency tolerance", detail: "Engagement holds steady up to ~3.5 average frequency before declining" },
+  { label: "Cross-device behavior", detail: "60%+ research on mobile, with a meaningful share converting on desktop" },
+  { label: "Geographic concentration", detail: "Urban and suburban metro areas index highest" },
+  { label: "Weekend vs. weekday", detail: "Weekend delivery shows a modest lift in click-through rate" },
+  { label: "New vs. returning audience", detail: "New-to-brand reach makes up the majority of available audience size" },
+];
+
+const MIN_INSIGHTS = 10;
+
 export function getMockMetaAudienceInsights(vertical: string): MetaAudienceInsight[] {
   const profile = VERTICAL_PROFILES.find((p) => p.match.test(vertical));
-  return profile ? profile.insights : DEFAULT_PROFILE;
+  const base = profile ? profile.insights : DEFAULT_PROFILE;
+
+  const usedLabels = new Set(base.map((i) => i.label));
+  const filler = GENERIC_FILLER_INSIGHTS.filter((i) => !usedLabels.has(i.label));
+
+  return [...base, ...filler].slice(0, Math.max(MIN_INSIGHTS, base.length));
 }

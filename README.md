@@ -2,9 +2,9 @@
 
 A chat-based advisor for cross-platform ad campaigns running on **Meta, LinkedIn, Google Ads,
 Taboola, and StackAdapt**. Ask it about a campaign ticket and it pulls performance data, flags
-anomalies, checks pacing/budget, and recommends reallocations — either through the LLM chat
-interface (native tool-calling) or by uploading raw platform export files for a campaign that
-isn't already in the tracked Google Sheet.
+anomalies, checks pacing/budget, and recommends reallocations through the LLM chat interface
+(native tool-calling). You can also attach raw platform export files directly in the chat to add
+a campaign that isn't already in the tracked Google Sheet.
 
 Built with Next.js 16 (App Router), TypeScript, and React 19.
 
@@ -65,7 +65,7 @@ provider" message instead of erroring.
 |---|---|
 | `USE_REAL_SHEETS` | `"true"` to read the real spreadsheet; anything else (or unset) uses built-in mock data. |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | The sheet ID. |
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account with read access to the sheet. |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account with **Editor** access to the sheet (not just Viewer) — uploaded campaigns are appended directly into it, see below. |
 | `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | Service account private key. Keep the literal `\n` escapes — the app un-escapes them at read time. |
 
 ### Data source #2 — ticketing (campaign metadata)
@@ -74,8 +74,9 @@ provider" message instead of erroring.
 |---|---|
 | `USE_REAL_TICKETING` | No real integration wired up yet (Jira/Zendesk/Freshdesk TBD) — always uses the mock ticketing source regardless of this value today. |
 
-Campaigns uploaded via the Upload feature (see below) are layered on top of whichever ticketing
-source is active, so they always show up regardless of this setting.
+Campaigns created via chat upload (see below) get their metadata from a `Tickets` tab in the same
+spreadsheet instead, layered on top of whichever ticketing source is active — so they show up
+regardless of this setting.
 
 ### Data source #3 — trending audience signals
 
@@ -92,11 +93,23 @@ labeled as mocked in the UI) while Google Trends stays live.
 
 ## Uploading campaigns from raw platform exports
 
-Campaigns don't have to come from the Google Sheet. The upload button (top of the ticket
-sidebar) accepts native export files — `.csv` or `.xlsx` — for any subset of the 5 platforms.
-Uploading 2+ platforms for the same campaign unlocks cross-platform comparison automatically.
-Uploaded campaigns are stored in a local file (`.uploaded-campaigns.json`, gitignored, not a real
-database) merged transparently into every existing tool/analysis path.
+Campaigns don't have to come from the Google Sheet. In the chat, click the paperclip icon next to
+the message input to attach native export files (`.csv` or `.xlsx`) for any subset of the 5
+platforms — uploading 2+ platforms for the same campaign unlocks cross-platform comparison
+automatically. After attaching, hit Send and the assistant asks a short series of questions in the
+chat itself (vertical, objective — Brand Awareness or Page Views/Traffic, goal amount, and budget/
+flight dates only if the files didn't already imply them) before creating the campaign and kicking
+off its analysis. This is a local, deterministic wizard, not an LLM call, so it isn't affected by
+the chat provider's rate limits.
+
+Uploaded campaigns are stored in the *same* Google Sheet everything else reads from — performance
+rows are appended into each relevant platform tab (indistinguishable from real rows), and ticket
+metadata goes into an auto-created `Tickets` tab — see `src/lib/uploaded-campaign-store.ts`. This
+only works when `USE_REAL_SHEETS=true` and the service account has Editor access (see above);
+there's no separate local database. Uploaded data isn't meant to be permanent: every time the
+server restarts, `src/instrumentation.ts` automatically clears out everything it previously
+uploaded (identified by campaign ID, never touching real pre-existing rows), so there's no
+accumulating test/demo data across sessions.
 
 Because these exports are single-snapshot totals rather than day-by-day rows, trend analysis and
 anomaly detection are skipped for them (not enough history) — everything else (performance,
@@ -109,6 +122,11 @@ variables listed above in the Netlify site's build/runtime environment settings 
 never deployed. The chat route bounds its own total request time (`REQUEST_DEADLINE_MS`) well
 under Netlify's function execution limit and returns partial results gracefully if a provider is
 slow, rather than letting Netlify kill the function outright.
+
+`instrumentation.ts`'s upload-cleanup hook (see above) fires once per fresh server instance —
+in serverless, that means once per cold start rather than once per "session" in the local-dev
+sense, so it may run more often than in `npm run dev`. That's harmless here since cleanup is
+idempotent (it's a no-op once nothing uploaded is left to remove).
 
 ## A note on `xlsx`
 

@@ -521,38 +521,45 @@ async function callChatCompletionsWithRetry(
   throw new Error(`${provider.name}: max retries exceeded`);
 }
 
-/**
- * Tries each provider in order, falling over to the next one only once the current one's own
- * retries are exhausted. `deadProviders` is shared across every tool-loop iteration of a single
- * request (see POST below): a provider that fails with a 429 (rate limit/quota) is permanently
- * out for the rest of THIS request -- that condition can't resolve itself mid-request, so
- * re-attempting it on iteration 2 through 10 would just burn a chunk of the shared deadline on a
- * guaranteed-failed call every time, starving the providers that actually work of the time they
- * need. A fresh request still tries every configured provider from scratch.
- */
+// Module-level, so it persists across requests on a warm server instance (best-effort on
+// serverless -- free when a warm instance handles the next request, harmless when a cold start
+// resets it). A provider that fails with a 429 (rate limit/quota) is skipped for this cooldown
+// window instead of being retried on the very next call, whether that's the next tool-loop
+// iteration of the same request or the next request entirely. Without this, a provider that's
+// out of quota for any reason -- a persistently dead key (e.g. OpenAI until billing is topped up)
+// or a free-tier per-minute cap that just tripped (e.g. Groq's account-wide TPM limit) -- wastes
+// a full round trip on every single call, indefinitely, starving whichever provider would have
+// actually worked of time and (on Groq) of its own shared token budget. 60s is short enough that
+// a per-minute rate-limit window has usually reset by the time it's tried again, long enough that
+// a dead key doesn't get retried on every request in a fast back-to-back demo session.
+const PROVIDER_COOLDOWN_MS = 60_000;
+const providerCooldownUntil = new Map<string, number>();
+
+/** Tries each provider in order, falling over to the next one only once the current one's own retries are exhausted. */
 async function callLLMWithFallback(
   providers: LLMProvider[],
   messages: ConversationMessage[],
   system: string,
   tools: ReturnType<typeof buildToolsParam>,
-  deadlineAt: number,
-  deadProviders: Set<string>
+  deadlineAt: number
 ): Promise<AssistantTurn & { provider: string }> {
   let lastError: unknown;
   for (const provider of providers) {
-    if (deadProviders.has(provider.name)) continue;
+    const cooldownUntil = providerCooldownUntil.get(provider.name);
+    if (cooldownUntil && Date.now() < cooldownUntil) continue;
     if (deadlineAt - Date.now() <= 500) {
       lastError = new Error("Request deadline exceeded before all providers could be tried.");
       break;
     }
     try {
       const turn = await callChatCompletionsWithRetry(provider, messages, system, tools, deadlineAt);
+      providerCooldownUntil.delete(provider.name);
       return { ...turn, provider: provider.name };
     } catch (err) {
       lastError = err;
       console.error(`[LLM Fallback] ${provider.name} failed.`, err instanceof Error ? err.message : err);
       if ((err as Error & { status?: number }).status === 429) {
-        deadProviders.add(provider.name);
+        providerCooldownUntil.set(provider.name, Date.now() + PROVIDER_COOLDOWN_MS);
       }
     }
   }
@@ -623,8 +630,6 @@ export async function POST(req: NextRequest) {
   // graceful-timeout/partial-results handling below ever got a chance to run.
   const REQUEST_DEADLINE_MS = 8000;
   const deadlineAt = Date.now() + REQUEST_DEADLINE_MS;
-  // Shared across every iteration below -- see callLLMWithFallback's doc comment.
-  const deadProviders = new Set<string>();
 
   try {
     let finalText = "";
@@ -647,7 +652,7 @@ export async function POST(req: NextRequest) {
       let toolCalls: AssistantToolCall[] | undefined;
       let provider: string;
       try {
-        const turn = await callLLMWithFallback(providers, conversationMessages, SYSTEM_PROMPT, tools, deadlineAt, deadProviders);
+        const turn = await callLLMWithFallback(providers, conversationMessages, SYSTEM_PROMPT, tools, deadlineAt);
         content = turn.content;
         toolCalls = turn.tool_calls;
         provider = turn.provider;

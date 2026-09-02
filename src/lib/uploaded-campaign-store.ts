@@ -94,7 +94,19 @@ function rowToTicket(row: string[]): TicketMetadata | null {
   };
 }
 
+// Every list_tickets/get_pacing_status/recommend_budget_reallocation/etc. tool call goes through
+// CompositeTicketingSource -> here, and each of those was paying a full ~3s live round trip
+// (ensureTicketsTab()'s spreadsheets.get() PLUS the actual values.get()) on every single call --
+// the dominant cost in the chat route's already-tight per-request deadline (see
+// REQUEST_DEADLINE_MS in api/chat/route.ts), often leaving too little of the budget for the
+// LLM's own round trips. Same fix as GoogleSheetsDataSource's ROWS_CACHE_TTL_MS for the same
+// reason: a short TTL trades a few seconds of staleness for collapsing N calls back to ~1.
+const TICKETS_CACHE_TTL_MS = 10_000;
+
 class UploadedCampaignStore {
+  private cachedTickets: TicketMetadata[] | null = null;
+  private cachedAt = 0;
+
   async add(record: UploadedCampaignRecord): Promise<void> {
     const { sheets, spreadsheetId } = await getSheetsClient();
     await ensureTicketsTab();
@@ -139,20 +151,31 @@ class UploadedCampaignStore {
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [ticketToRow(record.ticket)] },
     });
+
+    // Otherwise the campaign this same request is about to kick off analysis for wouldn't show
+    // up until the cache below expired.
+    this.cachedTickets = null;
   }
 
   async listTickets(): Promise<TicketMetadata[]> {
+    if (this.cachedTickets && Date.now() - this.cachedAt < TICKETS_CACHE_TTL_MS) {
+      return this.cachedTickets;
+    }
+
     // Reads degrade to "no uploaded campaigns" rather than throwing -- e.g. Sheets isn't
     // configured at all (tests, a fresh clone with no .env.local) or a transient API error.
-    // Writes (add(), below) intentionally still throw: a failed upload should surface as an
+    // Writes (add(), above) intentionally still throw: a failed upload should surface as an
     // error to the user, not silently vanish.
     try {
       const { sheets, spreadsheetId } = await getSheetsClient();
       await ensureTicketsTab();
       const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TICKETS_TAB}!A2:K` });
-      return (res.data.values ?? [])
+      const tickets = (res.data.values ?? [])
         .map((row) => rowToTicket(row as string[]))
         .filter((t): t is TicketMetadata => t !== null);
+      this.cachedTickets = tickets;
+      this.cachedAt = Date.now();
+      return tickets;
     } catch (err) {
       console.warn("[uploaded-campaign-store] listTickets failed, treating as no uploaded campaigns:", err instanceof Error ? err.message : err);
       return [];

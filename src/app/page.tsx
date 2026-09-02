@@ -3,7 +3,7 @@
 import { FormEvent, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ToolResult, ToolResultCard } from "@/components/cards/ToolResultCard";
+import { isErrorResult, ToolResult, ToolResultCard } from "@/components/cards/ToolResultCard";
 import { PlatformBadge } from "@/components/cards/primitives";
 import { TicketSidebar } from "@/components/dashboard/TicketSidebar";
 import { AttachFilesPopover } from "@/components/dashboard/AttachFilesPopover";
@@ -577,6 +577,7 @@ function groupToolResultsForDisplay(toolResults: ToolResult[]): DisplayItem[] {
 
 function ChatTurn({ message }: { message: Message }) {
   const isUser = message.role === "user";
+  const [downloading, setDownloading] = useState(false);
 
   if (isUser) {
     return (
@@ -603,6 +604,24 @@ function ChatTurn({ message }: { message: Message }) {
   }
 
   const items = groupToolResultsForDisplay(message.toolResults ?? []);
+  const hasDownloadableResults = (message.toolResults ?? []).some(
+    (tr) => tr.result !== null && tr.result !== undefined && !isErrorResult(tr.result)
+  );
+
+  async function handleDownloadReport() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const { generateCampaignReportPdf, extractCampaignId } = await import("@/lib/pdf-report");
+      generateCampaignReportPdf({
+        campaignId: extractCampaignId(message.toolResults ?? []),
+        toolResults: message.toolResults ?? [],
+        summary: message.content,
+      });
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <div className="flex flex-col items-start gap-2">
@@ -618,6 +637,25 @@ function ChatTurn({ message }: { message: Message }) {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
       </div>
+      {hasDownloadableResults && (
+        <button
+          type="button"
+          onClick={handleDownloadReport}
+          disabled={downloading}
+          className="flex items-center gap-1.5 self-start rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-accent dark:hover:text-accent"
+        >
+          <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5 shrink-0">
+            <path
+              d="M8 2v7.5M4.5 6.5 8 10l3.5-3.5M3 13.5h10"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          {downloading ? "Preparing PDF..." : "Download Report (PDF)"}
+        </button>
+      )}
     </div>
   );
 }

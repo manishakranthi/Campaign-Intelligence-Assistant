@@ -25,7 +25,7 @@ function ErrorCard({ message }: { message: string }) {
   );
 }
 
-function isErrorResult(result: unknown): result is { error: string } {
+export function isErrorResult(result: unknown): result is { error: string } {
   return typeof result === "object" && result !== null && "error" in result && typeof (result as { error: unknown }).error === "string";
 }
 

@@ -16,18 +16,30 @@ export const runtime = "nodejs";
 const OPENAI_MODEL = "gpt-4o-mini";
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+// llama-3.3-70b-versatile was retired from Groq's catalog (confirmed via GET /v1/models -- no
+// longer listed) and started 404ing outright. gpt-oss-120b is Groq-hosted, verified against a
+// live tool-calling request (returns proper tool_calls, not just plain text) -- also the fastest
+// of the tool-calling-capable candidates tried. Note this free-tier key's token-per-minute cap
+// (8000 TPM) is an account-wide limit that's identical across every model on it, confirmed via
+// the x-ratelimit-* response headers -- swapping models here won't buy more headroom for a
+// multi-tool conversation; only a paid tier or a funded OPENAI_API_KEY will.
+const GROQ_MODEL = "openai/gpt-oss-120b";
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 // Free-tier fallback for when Groq's per-minute/per-day quota is exhausted.
 // OpenRouter is also an OpenAI-compatible chat-completions API, so it reuses the same call path.
-const OPENROUTER_MODEL = "nvidia/nemotron-nano-9b-v2:free";
+// nemotron-nano-9b-v2:free was pulled from OpenRouter's catalog ("No endpoints found"). Picked a
+// different model family than the NVIDIA NIM fallback below on purpose, so one vendor retiring a
+// model doesn't take out two links of the chain at once; verified with a live tool-calling call.
+const OPENROUTER_MODEL = "minimax/minimax-m3:free";
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 // Second fallback, tried when both Groq and OpenRouter are exhausted. NVIDIA's own NIM API
 // (build.nvidia.com) has a quota entirely separate from OpenRouter's account-wide free-tier cap,
 // so it gives genuine extra headroom rather than sharing an already-exhausted pool.
-const NVIDIA_MODEL = "meta/llama-3.1-70b-instruct";
+// meta/llama-3.1-70b-instruct hit its documented end-of-life (410 Gone). Replaced with a model
+// confirmed both present in GET /v1/models and working against a live tool-calling request.
+const NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b";
 const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 const MAX_TOOL_ITERATIONS = 10;
@@ -509,16 +521,26 @@ async function callChatCompletionsWithRetry(
   throw new Error(`${provider.name}: max retries exceeded`);
 }
 
-/** Tries each provider in order, falling over to the next one only once the current one's own retries are exhausted. */
+/**
+ * Tries each provider in order, falling over to the next one only once the current one's own
+ * retries are exhausted. `deadProviders` is shared across every tool-loop iteration of a single
+ * request (see POST below): a provider that fails with a 429 (rate limit/quota) is permanently
+ * out for the rest of THIS request -- that condition can't resolve itself mid-request, so
+ * re-attempting it on iteration 2 through 10 would just burn a chunk of the shared deadline on a
+ * guaranteed-failed call every time, starving the providers that actually work of the time they
+ * need. A fresh request still tries every configured provider from scratch.
+ */
 async function callLLMWithFallback(
   providers: LLMProvider[],
   messages: ConversationMessage[],
   system: string,
   tools: ReturnType<typeof buildToolsParam>,
-  deadlineAt: number
+  deadlineAt: number,
+  deadProviders: Set<string>
 ): Promise<AssistantTurn & { provider: string }> {
   let lastError: unknown;
   for (const provider of providers) {
+    if (deadProviders.has(provider.name)) continue;
     if (deadlineAt - Date.now() <= 500) {
       lastError = new Error("Request deadline exceeded before all providers could be tried.");
       break;
@@ -529,6 +551,9 @@ async function callLLMWithFallback(
     } catch (err) {
       lastError = err;
       console.error(`[LLM Fallback] ${provider.name} failed.`, err instanceof Error ? err.message : err);
+      if ((err as Error & { status?: number }).status === 429) {
+        deadProviders.add(provider.name);
+      }
     }
   }
   throw lastError instanceof Error ? lastError : new Error("All configured LLM providers failed");
@@ -598,6 +623,8 @@ export async function POST(req: NextRequest) {
   // graceful-timeout/partial-results handling below ever got a chance to run.
   const REQUEST_DEADLINE_MS = 8000;
   const deadlineAt = Date.now() + REQUEST_DEADLINE_MS;
+  // Shared across every iteration below -- see callLLMWithFallback's doc comment.
+  const deadProviders = new Set<string>();
 
   try {
     let finalText = "";
@@ -620,7 +647,7 @@ export async function POST(req: NextRequest) {
       let toolCalls: AssistantToolCall[] | undefined;
       let provider: string;
       try {
-        const turn = await callLLMWithFallback(providers, conversationMessages, SYSTEM_PROMPT, tools, deadlineAt);
+        const turn = await callLLMWithFallback(providers, conversationMessages, SYSTEM_PROMPT, tools, deadlineAt, deadProviders);
         content = turn.content;
         toolCalls = turn.tool_calls;
         provider = turn.provider;

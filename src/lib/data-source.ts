@@ -48,12 +48,26 @@ class MockDataSource implements DataSource {
  * Date | Campaign Name | Spend | Impressions | Clicks | CTR | CPM | Frequency | Budget |
  * [Video metric] | Start Date | End Date
  */
+// A single campaign analysis calls getCampaignPerformance() (and therefore load()) separately
+// from 6+ different tools (trend, comparative, anomalies, fatigue, pacing, reallocation...) --
+// with no cache at all, that's 6-8x a full 5-tab Sheets fetch for one conversation, which is slow
+// enough locally but was actually breaking production: Netlify's Functions have a hard ~10s
+// execution timeout the platform enforces regardless of our own code, and it was killing the
+// request mid-flight (empty response body) before all those fetches finished. A short TTL cache
+// collapses one conversation's worth of calls back down to ~1 real fetch, while still resolving
+// the original concern (a just-uploaded campaign going stale forever) -- it's now stale for at
+// most a few seconds instead of either "forever" (the old bug) or "never" (the too-expensive fix).
+const ROWS_CACHE_TTL_MS = 10_000;
+
 class GoogleSheetsDataSource implements DataSource {
+  private rows: PerformanceRow[] | null = null;
+  private loadedAt = 0;
+
   private async load(): Promise<PerformanceRow[]> {
-    // Deliberately not cached: uploaded campaigns append rows into these same tabs via
-    // uploaded-campaign-store.ts, and under Turbopack each API route compiles as an isolated
-    // module graph -- a cached copy here would never see rows a *different* route just wrote.
-    // Always fetching live trades a bit of latency for correctness across routes.
+    if (this.rows && Date.now() - this.loadedAt < ROWS_CACHE_TTL_MS) {
+      return this.rows;
+    }
+
     const { sheets, spreadsheetId } = await getSheetsClient();
 
     const rows: PerformanceRow[] = [];
@@ -94,6 +108,8 @@ class GoogleSheetsDataSource implements DataSource {
       }
     }
 
+    this.rows = rows;
+    this.loadedAt = Date.now();
     return rows;
   }
 

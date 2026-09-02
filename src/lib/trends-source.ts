@@ -55,7 +55,7 @@ class LiveTrendsSource implements TrendsSource {
     return fallback;
   }
 
-  private async fetchLiveTrends(topic: string): Promise<GoogleTrendsResult | null> {
+  private async fetchLiveTrends(topic: string, attempt: 1 | 2 = 1): Promise<GoogleTrendsResult | null> {
     try {
       const googleTrends = (await import("google-trends-api")).default;
       const [interestRaw, relatedRaw] = await Promise.all([
@@ -67,8 +67,7 @@ class LiveTrendsSource implements TrendsSource {
       const timelineData: Array<{ time: string; value: number[] }> =
         interestJson?.default?.timelineData ?? [];
       if (timelineData.length === 0) {
-        console.warn(`fetchLiveTrends: no timeline data for "${topic}", trying next candidate.`);
-        return null;
+        throw new Error(`no timeline data for "${topic}"`);
       }
 
       const interestOverTime = timelineData.slice(-12).map((point) => ({
@@ -87,7 +86,17 @@ class LiveTrendsSource implements TrendsSource {
 
       return { topic, interestOverTime, relatedQueries, source: "live" };
     } catch (err) {
-      console.warn(`fetchLiveTrends: live Google Trends call failed for "${topic}", trying next candidate.`, err);
+      // Google rate-limits/blocks the internal endpoint this unofficial package scrapes fairly
+      // often (an HTML "Error 429" page instead of JSON, confirmed by hand). One short-delay
+      // retry recovers from a momentary block; a sustained per-IP block won't be helped by
+      // waiting and falls through to the next candidate topic (then the mocked fallback), same
+      // as before.
+      if (attempt === 1) {
+        console.warn(`fetchLiveTrends: live Google Trends call failed for "${topic}", retrying once in 2.5s.`, err);
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        return this.fetchLiveTrends(topic, 2);
+      }
+      console.warn(`fetchLiveTrends: live Google Trends call failed for "${topic}" on retry, trying next candidate.`, err);
       return null;
     }
   }

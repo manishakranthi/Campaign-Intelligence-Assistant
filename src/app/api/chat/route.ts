@@ -589,12 +589,14 @@ export async function POST(req: NextRequest) {
 
   const toolCallLog: { name: string; args: unknown; result: unknown }[] = [];
   const tools = buildToolsParam();
-  // Netlify (and most serverless hosts) kill a function outright at a hard wall-clock limit,
-  // returning a bare 502 instead of letting our own error handling respond. A multi-tool
-  // conversation makes several sequential LLM round trips, so bound the WHOLE request -- not
-  // just a single call -- well under that limit, and bail into our own graceful message before
-  // the platform ever gets the chance to do it for us.
-  const REQUEST_DEADLINE_MS = 20000;
+  // Netlify's synchronous Functions have a hard ~10s execution timeout the platform enforces
+  // regardless of what our own code thinks its budget is -- when it kills the function mid-
+  // response, the client gets a truncated/empty body (a raw "Unexpected end of JSON input" on
+  // the client, not one of our own error messages). This MUST stay well under that real limit,
+  // not just under some larger assumed budget -- confirmed this was set to 20000ms (over
+  // Netlify's actual limit), which meant Netlify's kill always won the race before our own
+  // graceful-timeout/partial-results handling below ever got a chance to run.
+  const REQUEST_DEADLINE_MS = 8000;
   const deadlineAt = Date.now() + REQUEST_DEADLINE_MS;
 
   try {

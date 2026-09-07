@@ -44,6 +44,19 @@ const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 const MAX_TOOL_ITERATIONS = 10;
 
+/**
+ * A relatively small/free-tier model doesn't reliably follow a nuanced conditional instruction
+ * buried in a long system prompt -- confirmed live: despite the system prompt explicitly saying
+ * a "give me actions to take"-style follow-up should never re-trigger the full analysis flow,
+ * it kept doing exactly that. Prompt wording alone isn't a strong enough guarantee here, so this
+ * backs it with an actual code-level guarantee: when the newest message matches this pattern, the
+ * request is sent with NO tools available at all (see suppressTools below), so the model is
+ * physically incapable of calling anything, however it interprets the prompt -- it can only
+ * answer from whatever's already in the conversation, which is exactly the desired behavior.
+ */
+const NARROW_RECAP_PATTERN =
+  /\b(top\s+)?actions?\s+to\s+take\b|\bnext\s+steps?\b|\baction\s+items?\b|\bwhat\s+should\s+i\s+do\b/i;
+
 const SYSTEM_PROMPT = `You are the Campaign Intelligence Assistant, an AI advisor for cross-platform
 ad campaigns running on Meta, LinkedIn, Google Ads, Taboola, and StackAdapt.
 
@@ -483,10 +496,13 @@ async function callChatCompletionsWithRetry(
     try {
       console.log(`[${provider.name}] Attempt ${attempt + 1}/${maxRetries} for model: ${provider.model}`);
 
+      // Some providers reject an empty `tools: []` array as invalid rather than silently treating
+      // it as "no tools" -- so when tool-calling is deliberately suppressed for this turn (see
+      // NARROW_RECAP_PATTERN below), omit the field entirely instead of sending an empty array.
       const payload = {
         model: provider.model,
         messages: [{ role: "system", content: system }, ...messages],
-        tools,
+        ...(tools.length > 0 ? { tools } : {}),
         max_tokens: 2048,
       };
 
@@ -726,7 +742,12 @@ export async function POST(req: NextRequest) {
   }
 
   const toolCallLog: { name: string; args: unknown; result: unknown }[] = [];
-  const tools = buildToolsParam();
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+  const suppressTools = Boolean(lastUserMessage && NARROW_RECAP_PATTERN.test(lastUserMessage.content));
+  if (suppressTools) {
+    console.log("[Tool Loop] Narrow recap-style message detected -- suppressing tool-calling for this request.");
+  }
+  const tools = suppressTools ? [] : buildToolsParam();
   // Netlify's synchronous Functions have a hard ~10s execution timeout the platform enforces
   // regardless of what our own code thinks its budget is -- when it kills the function mid-
   // response, the client gets a truncated/empty body (a raw "Unexpected end of JSON input" on

@@ -147,6 +147,12 @@ worth doing first and briefly why, not an equal-weight recap of every tool's out
 
 If asked for something you don't have a tool for, say so plainly instead of guessing.
 
+Never narrate about system performance -- don't mention timeouts, slow responses, retries, or
+that a reply "didn't finish" or "got cut off," even if an earlier message in this conversation
+reads that way. If a prior turn's content looks partial or incomplete, that's not something to
+comment on or apologize for -- just answer the current question directly from whatever data is
+actually present in the conversation, the same as you would for any other message.
+
 Every result you gather is already rendered to the user as a visual card or dashboard (tables,
 charts, badges) before your reply appears. Do NOT restate that data in prose -- no re-listing
 campaign tables, no repeating every metric already shown in a chart. Your reply should be a
@@ -801,15 +807,23 @@ export async function POST(req: NextRequest) {
     }
 
     if (!finalText) {
+      // Deliberately neutral/factual phrasing below, with no "timeout"/"AI slowed down"/"didn't
+      // finish" framing -- that language, once it's part of this reply's persisted content, was
+      // observed getting echoed and escalated by the model on later turns (e.g. "the response hit
+      // a timeout... the message body wasn't completed, so I don't have a ranked action list to
+      // restate" -- a hallucinated narrative in a LATER turn that never actually timed out itself,
+      // clearly anchored on this text's own prior wording). Presenting whatever data exists as
+      // plain fact, with no meta-commentary about system performance, gives a later turn nothing
+      // to latch onto and extend.
       if (hitDeadline && toolCallLog.length > 0) {
         const recap = buildFallbackRecap(toolCallLog);
         finalText = recap
-          ? `That's taking longer than expected, so the AI didn't get to finish its own summary -- here's what was actually gathered before it slowed down: ${recap} Ask a follow-up (e.g. "give me actions to take") and I'll work from this.`
-          : "That's taking longer than expected, so here's what I found before the AI provider slowed down -- ask a follow-up if you need the rest.";
+          ? `Here's what's available for this campaign so far: ${recap}`
+          : "I have some initial data gathered but nothing conclusive yet -- ask about a specific aspect (e.g. pacing, budget, or anomalies) and I'll look it up directly.";
       } else if (hitDeadline) {
-        finalText = "That's taking longer than expected right now (the AI provider is responding slowly) -- please try again in a moment.";
+        finalText = "I couldn't retrieve any data just now -- try asking about one specific thing (e.g. pacing on a specific campaign) in a moment.";
       } else {
-        finalText = "I wasn't able to finish that request after several tool calls -- try rephrasing or asking about one campaign at a time.";
+        finalText = "I wasn't able to complete that request -- try asking about one campaign or one specific aspect at a time.";
       }
     }
 

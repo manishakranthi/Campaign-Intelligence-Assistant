@@ -56,6 +56,68 @@ function formatSignedPercent(n: number | null, digits = 1): string {
   return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}%`;
 }
 
+/** Matches the semantic red/amber/emerald used for badges elsewhere in this app's UI. */
+const PRIORITY_COLORS: Record<string, readonly [number, number, number]> = {
+  HIGH: [220, 38, 38],
+  MEDIUM: [217, 119, 6],
+  LOW: [5, 150, 105],
+};
+
+interface MarkdownToken {
+  text: string;
+  bold: boolean;
+  /** True when this token immediately follows a bold span with no space in the source (e.g. the
+   * ":" in "**Label**: value") -- rendered glued to the previous token instead of space-separated. */
+  noLeadingSpace: boolean;
+}
+
+/**
+ * Splits inline text on "**" delimiters into individual words, each tagged bold or not, for
+ * word-wrapped rendering. Uses a plain open/close toggle per "**" occurrence rather than
+ * matching balanced pairs -- the LLM doesn't always emit clean non-overlapping bold spans (e.g.
+ * "**Shift ~$70/day from **Google**..." bolds a phrase AND a name inside it), and a pair-matching
+ * regex on malformed input like that both picks the wrong words as bold and leaves a literal
+ * stray "**" in the final segment. The toggle approach consumes every "**" unconditionally, so
+ * there's never a leftover delimiter in the visible text, regardless of how the source is nested.
+ */
+function parseInlineMarkdown(text: string): MarkdownToken[] {
+  const tokens: MarkdownToken[] = [];
+  const segments = text.split("**");
+  // Whether the text immediately before the current segment ended in whitespace -- "**" itself is
+  // a zero-width delimiter, so adjacency has to look at both sides of it: a segment starting with
+  // a non-space character glues to the previous token ONLY if that previous segment also had no
+  // trailing space (e.g. "**Label**:" glues, but "-- **High" must not, since the space before "**"
+  // lives in the segment before it, not this one).
+  let prevEndsWithSpace = true;
+  segments.forEach((segment, segIndex) => {
+    if (!segment) return;
+    const bold = segIndex % 2 === 1;
+    const glueFirstWord = !/^\s/.test(segment) && !prevEndsWithSpace;
+    segment
+      .split(/\s+/)
+      .map(stripUnsupportedGlyphs)
+      .filter(Boolean)
+      .forEach((word, i) => {
+        tokens.push({ text: word, bold, noLeadingSpace: i === 0 && glueFirstWord });
+      });
+    prevEndsWithSpace = /\s$/.test(segment);
+  });
+  return tokens;
+}
+
+/**
+ * jsPDF's standard 14 fonts only cover the WinAnsi/CP1252 range -- any astral-plane character
+ * (emoji included, e.g. the priority circles a model might emit: HIGH/MEDIUM/LOW markers) renders
+ * as garbled bytes instead of the glyph or even a blank. Confirmed directly: rendering U+1F534
+ * (🔴) with the default Helvetica font produces visible garbage, not a missing-glyph box. Strip
+ * anything outside the Basic Multilingual Plane before it ever reaches doc.text() -- priority
+ * emoji specifically get a proper colored-text treatment instead (see markdownLine's header
+ * handling below); this is the fallback for anything else that slips through.
+ */
+function stripUnsupportedGlyphs(text: string): string {
+  return text.replace(/[\u{10000}-\u{10FFFF}]/gu, "").trim();
+}
+
 /** The first campaignId found across a chat turn's tool calls, or null (e.g. a bare list_tickets turn). */
 export function extractCampaignId(toolResults: ToolResult[]): string | null {
   for (const tr of toolResults) {
@@ -138,8 +200,36 @@ class ReportWriter {
     this.doc.setFont("helvetica", "bold");
     this.doc.setFontSize(10.5);
     this.doc.setTextColor(55, 65, 81);
-    this.doc.text(text, this.margin, this.y);
+    this.doc.text(stripUnsupportedGlyphs(text), this.margin, this.y);
     this.y += 14;
+  }
+
+  /**
+   * A markdown header that leads with a priority emoji + HIGH/MEDIUM/LOW (e.g. "🔴 HIGH —
+   * Reallocate Budget to Meta") gets the emoji replaced with a colored priority word instead of
+   * attempting to render the glyph -- jsPDF's standard font can't display it (see
+   * stripUnsupportedGlyphs), so this recovers the semantic red/amber/green meaning as color
+   * instead of losing it outright. Any other header falls back to the plain h3 style.
+   */
+  priorityHeader(text: string) {
+    const match = text.match(/^[^\w]*(HIGH|MEDIUM|LOW)\b(.*)$/i);
+    if (!match) {
+      this.h3(text);
+      return;
+    }
+    const level = match[1].toUpperCase();
+    const rest = stripUnsupportedGlyphs(match[2]);
+    const color = PRIORITY_COLORS[level] ?? ([55, 65, 81] as const);
+
+    this.ensureSpace(18);
+    this.doc.setFont("helvetica", "bold");
+    this.doc.setFontSize(11);
+    this.doc.setTextColor(...color);
+    this.doc.text(level, this.margin, this.y);
+    const levelWidth = this.doc.getTextWidth(level);
+    this.doc.setTextColor(55, 65, 81);
+    this.doc.text(rest, this.margin + levelWidth + this.doc.getTextWidth(" "), this.y);
+    this.y += 15;
   }
 
   body(text: string, opts: { italic?: boolean } = {}) {
@@ -168,6 +258,75 @@ class ReportWriter {
       });
     }
     this.y += 3;
+  }
+
+  /** Word-wraps pre-tokenized bold/normal runs, switching font weight per word, wrapping at contentWidth. */
+  private renderWrappedTokens(tokens: MarkdownToken[], indent: number) {
+    const maxX = this.pageWidth - this.margin;
+    let x = this.margin + indent;
+    this.doc.setFontSize(9.5);
+    this.doc.setFont("helvetica", "normal");
+    const spaceWidth = this.doc.getTextWidth(" ");
+    let isFirst = true;
+    for (const token of tokens) {
+      this.doc.setFont("helvetica", token.bold ? "bold" : "normal");
+      this.doc.setTextColor(51, 51, 51);
+      const w = this.doc.getTextWidth(token.text);
+      const gap = isFirst || token.noLeadingSpace ? 0 : spaceWidth;
+      if (x > this.margin + indent && x + gap + w > maxX) {
+        this.y += 13;
+        this.ensureSpace(13);
+        x = this.margin + indent;
+      } else {
+        x += gap;
+      }
+      this.doc.text(token.text, x, this.y);
+      x += w;
+      isFirst = false;
+    }
+    this.y += 13;
+  }
+
+  /**
+   * Renders one line of the LLM's own markdown-flavored text: a leading #'s line becomes a small
+   * heading, a leading -/* becomes a bullet, and **bold** spans anywhere render as actual bold
+   * text -- instead of a PDF literally printing "### Performance Overview" and "**Total Spend**"
+   * as plain characters (jsPDF has no built-in markdown support, so the raw syntax showed through
+   * verbatim otherwise).
+   */
+  markdownLine(rawLine: string) {
+    const line = rawLine.trim();
+    if (!line) {
+      this.spacer(4);
+      return;
+    }
+
+    const headerMatch = line.match(/^#{1,6}\s*(.+)$/);
+    if (headerMatch) {
+      this.spacer(2);
+      this.priorityHeader(headerMatch[1].replace(/\*\*/g, ""));
+      return;
+    }
+
+    const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+    const content = bulletMatch ? bulletMatch[1] : line;
+    const indent = bulletMatch ? 14 : 0;
+
+    this.ensureSpace(13);
+    if (bulletMatch) {
+      this.doc.setFont("helvetica", "normal");
+      this.doc.setFontSize(9.5);
+      this.doc.setTextColor(51, 51, 51);
+      this.doc.text("•", this.margin, this.y);
+    }
+
+    this.renderWrappedTokens(parseInlineMarkdown(content), indent);
+  }
+
+  /** Multi-line markdown text (the assistant's own reply) -- see markdownLine for the supported subset. */
+  markdownParagraph(text: string) {
+    for (const line of text.split(/\r?\n/)) this.markdownLine(line);
+    this.spacer(3);
   }
 
   /** Distinct treatment for cross-platform-correlated anomaly findings -- mirrors CrossPlatformCallout. */
@@ -481,7 +640,7 @@ export function generateCampaignReportPdf({ campaignId, toolResults, summary }: 
 
   if (summary && summary.trim()) {
     w.h3("Assistant Summary");
-    w.body(summary.trim());
+    w.markdownParagraph(summary.trim());
     w.spacer(8);
   }
 

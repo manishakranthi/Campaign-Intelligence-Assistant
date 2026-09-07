@@ -595,7 +595,7 @@ function ChatTurn({ message }: { message: Message }) {
           </div>
         )}
         {message.content && (
-          <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-zinc-900 px-4 py-3 text-sm leading-relaxed text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900">
+          <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-accent px-4 py-3 text-sm leading-relaxed text-accent-foreground shadow-sm shadow-accent/30 dark:bg-zinc-100 dark:text-zinc-900 dark:shadow-none">
             {message.content}
           </div>
         )}

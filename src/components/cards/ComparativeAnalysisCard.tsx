@@ -1,5 +1,14 @@
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Card, CardHeading, CrossPlatformCallout, PlatformBadge, SectionLabel } from "./primitives";
+import {
+  Card,
+  CardHeading,
+  CrossPlatformCallout,
+  DataTable,
+  formatCurrency,
+  formatPercent,
+  PlatformBadge,
+  SectionLabel,
+} from "./primitives";
 import { CHART_COLORS } from "./chart-theme";
 
 interface PeerComparisonFinding {
@@ -32,6 +41,89 @@ interface PeerComparisonChartDatum {
   percentDifference: number;
   isBetterThanPeers: boolean;
   description: string;
+}
+
+function formatSignedPercent(n: number): string {
+  return `${n >= 0 ? "+" : ""}${n.toFixed(0)}%`;
+}
+
+/** This campaign's platforms always report CTR and CPM as a pair (see comparative-analysis.ts),
+ * so pivoting the flat findings list into one row per platform puts both metrics side by side --
+ * clearer at a glance than reading a "ctr"/"cpm" tag off each of two separate rows. */
+interface PlatformPeerRow {
+  platform: string;
+  ctr: PeerComparisonFinding;
+  cpm: PeerComparisonFinding;
+}
+
+function groupPeerComparisonsByPlatform(comparisons: PeerComparisonFinding[]): PlatformPeerRow[] {
+  const byPlatform = new Map<string, Partial<Record<"ctr" | "cpm", PeerComparisonFinding>>>();
+  for (const c of comparisons) {
+    const entry = byPlatform.get(c.platform) ?? {};
+    entry[c.metric] = c;
+    byPlatform.set(c.platform, entry);
+  }
+  const rows: PlatformPeerRow[] = [];
+  for (const [platform, entry] of byPlatform) {
+    if (entry.ctr && entry.cpm) rows.push({ platform, ctr: entry.ctr, cpm: entry.cpm });
+  }
+  return rows;
+}
+
+function PeerComparisonTable({ comparisons }: { comparisons: PeerComparisonFinding[] }) {
+  const rows = groupPeerComparisonsByPlatform(comparisons);
+  return (
+    <DataTable>
+      <thead>
+        <tr className="text-left">
+          <th className="py-2 pl-3 pr-3 font-medium">Platform</th>
+          <th className="py-2 pr-3 font-medium">Your CTR</th>
+          <th className="py-2 pr-3 font-medium">Peer Avg CTR</th>
+          <th className="py-2 pr-3 font-medium">CTR vs. Peers</th>
+          <th className="py-2 pr-3 font-medium">Your CPM</th>
+          <th className="py-2 pr-3 font-medium">Peer Avg CPM</th>
+          <th className="py-2 pr-3 font-medium">CPM vs. Peers</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.platform}>
+            <td className="py-2 pl-3 pr-3">
+              <PlatformBadge platform={row.platform} />
+            </td>
+            <td className="py-2 pr-3 tabular-nums text-zinc-800 dark:text-zinc-200">
+              {formatPercent(row.ctr.thisCampaignValue, 2)}
+            </td>
+            <td className="py-2 pr-3 tabular-nums text-zinc-500 dark:text-zinc-400">
+              {formatPercent(row.ctr.peerAverage, 2)}{" "}
+              <span className="text-[10px] text-zinc-400">({row.ctr.peerCount} peers)</span>
+            </td>
+            <td
+              className={`py-2 pr-3 tabular-nums font-medium ${
+                row.ctr.isBetterThanPeers ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+              }`}
+            >
+              {formatSignedPercent(row.ctr.percentDifference)}
+            </td>
+            <td className="py-2 pr-3 tabular-nums text-zinc-800 dark:text-zinc-200">
+              {formatCurrency(row.cpm.thisCampaignValue)}
+            </td>
+            <td className="py-2 pr-3 tabular-nums text-zinc-500 dark:text-zinc-400">
+              {formatCurrency(row.cpm.peerAverage)}{" "}
+              <span className="text-[10px] text-zinc-400">({row.cpm.peerCount} peers)</span>
+            </td>
+            <td
+              className={`py-2 pr-3 tabular-nums font-medium ${
+                row.cpm.isBetterThanPeers ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+              }`}
+            >
+              {formatSignedPercent(row.cpm.percentDifference)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </DataTable>
+  );
 }
 
 function PeerComparisonTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: PeerComparisonChartDatum }> }) {
@@ -114,27 +206,12 @@ export function ComparativeAnalysisCard({
         <div className="flex flex-col gap-2">
           <SectionLabel>This campaign vs. peer campaigns</SectionLabel>
           <PeerComparisonChart comparisons={comparison.peerComparisons} />
-          {comparison.peerComparisons.map((c, i) => (
-            <div
-              key={`${c.platform}-${c.metric}-${i}`}
-              className={`rounded-lg border px-3 py-2 text-sm ${
-                c.isBetterThanPeers
-                  ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30"
-                  : "border-zinc-200 dark:border-zinc-800"
-              }`}
-            >
-              <div className="mb-0.5 flex items-center gap-1.5">
-                <PlatformBadge platform={c.platform} />
-                <span className="text-xs uppercase text-zinc-400">{c.metric}</span>
-              </div>
-              <p className="text-zinc-700 dark:text-zinc-300">{c.description}</p>
-            </div>
-          ))}
+          <PeerComparisonTable comparisons={comparison.peerComparisons} />
         </div>
       )}
     </>
   );
 
   if (bare) return content;
-  return <Card className="max-w-2xl">{content}</Card>;
+  return <Card className="max-w-3xl overflow-x-auto">{content}</Card>;
 }

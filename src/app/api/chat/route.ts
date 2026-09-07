@@ -595,6 +595,77 @@ async function callLLMWithFallback(
   throw lastError instanceof Error ? lastError : new Error("All configured LLM providers failed");
 }
 
+/**
+ * The client only persists each assistant turn's final text `content` across requests (see
+ * page.tsx's sendChatMessage -- it strips toolResults before POSTing), never the raw tool_calls/
+ * tool messages. So when a request times out before the model ever produces its own synthesis,
+ * the bare "here's what I found" apology below used to be ALL that survived into the next turn's
+ * conversation history -- meaning a follow-up like "give me actions to take" had zero real data
+ * to work from, even though the tool calls genuinely succeeded and are visible in the dashboard.
+ * This builds a compact, deterministic (no extra LLM call -- there's no time budget left for one)
+ * recap straight from the already-fetched results, reusing the human-readable strings each
+ * analysis module already produces (recommendation/reason/summary/description fields), so real
+ * findings persist into the conversation instead of being silently dropped.
+ */
+function buildFallbackRecap(toolCallLog: { name: string; args: unknown; result: unknown }[]): string {
+  const lines: string[] = [];
+
+  for (const { name, result } of toolCallLog) {
+    if (!result || typeof result !== "object" || "error" in (result as object)) continue;
+    const r = result as Record<string, unknown>;
+
+    switch (name) {
+      case "get_campaign_performance": {
+        const c = r.combined as Record<string, number | null> | undefined;
+        if (c && typeof c.spend === "number") {
+          lines.push(
+            `Performance: $${Math.round(c.spend).toLocaleString("en-US")} spend, ` +
+              `${(c.ctr as number).toFixed(2)}% CTR, $${(c.cpm as number).toFixed(2)} CPM.`
+          );
+        }
+        break;
+      }
+      case "get_pacing_status": {
+        if (typeof r.spendPacingDetail === "string") lines.push(r.spendPacingDetail);
+        if (typeof r.goalPacingDetail === "string") lines.push(r.goalPacingDetail);
+        break;
+      }
+      case "recommend_budget_reallocation": {
+        if (r.applicable && typeof r.recommendation === "string") lines.push(r.recommendation);
+        break;
+      }
+      case "detect_anomalies": {
+        const cross = r.crossPlatformFindings as Array<{ description: string }> | undefined;
+        const findings = r.findings as Array<{ description: string }> | undefined;
+        if (cross && cross.length > 0) lines.push(cross[0].description);
+        else if (findings && findings.length > 0) lines.push(findings[0].description);
+        break;
+      }
+      case "detect_creative_fatigue": {
+        const findings = r.findings as Array<{ summary: string }> | undefined;
+        if (findings && findings.length > 0) lines.push(findings[0].summary);
+        break;
+      }
+      case "suggest_audience_expansion": {
+        if (typeof r.reason === "string") lines.push(r.reason);
+        break;
+      }
+      case "get_trend_analysis": {
+        const combined = r.combined as Array<{ metric: string; direction: string; percentChange: number | null; isMeaningful: boolean }> | undefined;
+        const meaningful = combined?.find((m) => m.isMeaningful);
+        if (meaningful && meaningful.percentChange !== null) {
+          lines.push(`Trend: ${meaningful.metric} ${meaningful.direction} ${Math.abs(meaningful.percentChange).toFixed(0)}% vs. the prior period.`);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  // Cap at 4 lines -- this is a stopgap recap, not a full report; the PDF/dashboard already show everything gathered.
+  return lines.slice(0, 4).join(" ");
+}
 
 export async function POST(req: NextRequest) {
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
@@ -731,8 +802,10 @@ export async function POST(req: NextRequest) {
 
     if (!finalText) {
       if (hitDeadline && toolCallLog.length > 0) {
-        finalText =
-          "That's taking longer than expected, so here's what I found before the AI provider slowed down -- ask a follow-up if you need the rest.";
+        const recap = buildFallbackRecap(toolCallLog);
+        finalText = recap
+          ? `That's taking longer than expected, so the AI didn't get to finish its own summary -- here's what was actually gathered before it slowed down: ${recap} Ask a follow-up (e.g. "give me actions to take") and I'll work from this.`
+          : "That's taking longer than expected, so here's what I found before the AI provider slowed down -- ask a follow-up if you need the rest.";
       } else if (hitDeadline) {
         finalText = "That's taking longer than expected right now (the AI provider is responding slowly) -- please try again in a moment.";
       } else {

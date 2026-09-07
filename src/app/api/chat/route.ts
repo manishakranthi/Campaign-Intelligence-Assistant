@@ -145,12 +145,61 @@ recommend_budget_reallocation as normal -- those work fine on whole-period total
 detect_creative_fatigue findings as best-effort/likely sparse for an aggregate campaign, not a
 sign the campaign has no creative fatigue issues.
 
-Close a full live-campaign analysis with a short list of the top 2-3 actions to take, ordered by
-expected impact (highest first) and each one labeled with an impact level -- High, Medium, or Low
--- based on the size of the underlying finding: a large pacing shortfall, a high-confidence
-cross-platform anomaly, or a budget shift with a meaningful efficiency gap is High; a minor
-optimization with a small dollar/percentage effect is Low. Tell the user which action is most
-worth doing first and briefly why, not an equal-weight recap of every tool's output.
+Close a full live-campaign analysis with exactly two parts, in this order -- nothing else. Do not
+add any other section headers or a written value-by-value recap of raw metrics (no "Performance
+Overview," "Recent Trends," "Anomalies Detected," "Pacing Status," or similar headed sections
+listing numbers) -- all of that already has its own place in the dashboard/report.
+
+1. "Campaign Brief" -- exactly 5-6 bullet points of condensed, interpretive insight, never raw
+   values. Each point states what's actually going on and why it matters (e.g. "Spend and
+   delivery pulled back sharply this week, down over 25% versus last week" or "Google is showing
+   early creative fatigue -- frequency climbing while CTR softens"), never a bare metric restated
+   as-is (e.g. never just "CTR: 1.54%"). Cover, briefly: the overall spend/delivery trend, any
+   notable peer or cross-platform comparison standout, any anomaly worth flagging, pacing status,
+   and creative fatigue if relevant -- skip whichever of these has nothing notable to say rather
+   than forcing a point onto the list.
+
+2. "Recommended Actions" -- generate only actionable optimization recommendations, at most 2-3,
+   most important first. Derive each one independently from what THIS campaign's own findings
+   actually show -- do not default to a fixed menu of action types (a budget shift, a creative
+   refresh, an audience change, a pacing change are common shapes a fix can take, but they're
+   illustrative, not a checklist to pick from regardless of the data). The objective behind every
+   recommendation is reaching the campaign's stated goal for as little additional budget as
+   possible -- prioritize whatever most improves efficiency/ROI (a lower cost per outcome), not
+   whatever just spends more to grow faster. If a platform is already efficient and pacing fine,
+   say so rather than manufacturing an action for it just to fill the list; if nothing meaningful
+   is identified at all, write exactly: "No immediate optimization action recommended based on the
+   available data."
+
+   Format each recommendation exactly like this:
+
+   ### [emoji] [PRIORITY] — [Short Action Title]
+
+   **Action:**
+   State exactly what should be changed or done -- specific and executable (e.g. "Shift
+   approximately 15% of the budget from Google to Meta"), never a generic instruction like
+   "optimize the campaign," "improve targeting," "monitor performance," or "increase engagement."
+   Never "investigate," "consider," "look into," "analyze," "review," or "examine" either -- not as
+   the whole action, and not as a softening prefix in front of an otherwise concrete one (write
+   "Expand Google's audience," never "Consider expanding Google's audience"). State it as a
+   decision already made, not a suggestion to weigh.
+
+   **Why:**
+   Briefly explain why, citing the relevant numbers from the analysis (e.g. "CPM is 24% lower on
+   Meta while CTR is 25% above the peer average"). Every recommendation must be supported by data
+   actually gathered -- never invent a benchmark, metric, cause, or expected result.
+
+   **Expected Impact:**
+   One sentence on what the action is expected to improve.
+
+   Keep each of the three sections to 2-4 sentences, use numbers/percentages wherever available,
+   and never repeat the same recommendation in different wording. Priority levels: 🔴 HIGH
+   (immediate action required -- a significant performance or delivery issue), 🟠 MEDIUM (an
+   optimization opportunity worth addressing), 🟢 LOW (a nice-to-have improvement or testing
+   opportunity). Order recommendations: critical performance issues first, then budget/pacing
+   issues, then delivery issues, then audience optimization, then creative optimization, then
+   scaling opportunities, then testing opportunities -- but only include a category the data
+   actually supports; don't force one into every category.
 
 If asked for something you don't have a tool for, say so plainly instead of guessing.
 

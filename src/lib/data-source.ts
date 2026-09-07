@@ -72,14 +72,19 @@ class GoogleSheetsDataSource implements DataSource {
 
     const rows: PerformanceRow[] = [];
 
-    for (const platform of PLATFORM_KEYS) {
-      const tabLabel = PLATFORM_TAB_LABEL[platform];
-      const res = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${tabLabel}!A2:L`,
-      });
+    // One batchGet for all 5 tabs instead of 5 separate values.get() calls -- each of those
+    // counts as its own request against Sheets API's per-minute read-request quota, and this
+    // load() already runs once per cache miss from several different tools in the same
+    // conversation (see ROWS_CACHE_TTL_MS above). Confirmed hitting "Quota exceeded... Read
+    // requests per minute per user" under real usage; batching cuts this path's request count 5x.
+    const res = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId,
+      ranges: PLATFORM_KEYS.map((platform) => `${PLATFORM_TAB_LABEL[platform]}!A2:L`),
+    });
 
-      for (const line of res.data.values ?? []) {
+    PLATFORM_KEYS.forEach((platform, i) => {
+      const values = res.data.valueRanges?.[i]?.values ?? [];
+      for (const line of values) {
         const [date, campaignName, spend, impressions, clicks, ctr, cpm, frequency, budget, videoMetric, startDate, endDate] = line;
         if (!date || !campaignName) continue;
 
@@ -106,7 +111,7 @@ class GoogleSheetsDataSource implements DataSource {
           endDate: String(endDate ?? ""),
         });
       }
-    }
+    });
 
     this.rows = rows;
     this.loadedAt = Date.now();

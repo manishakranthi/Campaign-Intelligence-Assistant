@@ -27,11 +27,23 @@ const TICKETS_HEADER = [
   "Platforms",
 ];
 
+// Once created, the Tickets tab is never removed by this app (cleanup only deletes rows in it --
+// see cleanupUploadedCampaigns below), so its existence never needs re-checking after the first
+// confirmed sighting. Without this, every listTickets()/add() cache miss paid a spreadsheets.get()
+// metadata call purely to re-confirm something that can't have changed -- one more request eating
+// into Sheets API's per-minute read-request quota alongside the actual data read.
+let ticketsTabConfirmedToExist = false;
+
 async function ensureTicketsTab(): Promise<void> {
+  if (ticketsTabConfirmedToExist) return;
+
   const { sheets, spreadsheetId } = await getSheetsClient();
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const exists = (meta.data.sheets ?? []).some((s) => s.properties?.title === TICKETS_TAB);
-  if (exists) return;
+  if (exists) {
+    ticketsTabConfirmedToExist = true;
+    return;
+  }
 
   // Purely additive -- never touches any existing tab.
   await sheets.spreadsheets.batchUpdate({
@@ -44,6 +56,7 @@ async function ensureTicketsTab(): Promise<void> {
     valueInputOption: "RAW",
     requestBody: { values: [TICKETS_HEADER] },
   });
+  ticketsTabConfirmedToExist = true;
 }
 
 function ticketToRow(t: TicketMetadata): (string | number)[] {

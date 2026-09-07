@@ -105,29 +105,23 @@ recommendation, not analysis:
    no performance data.
 
 For a LIVE ticket, do full analysis, roughly in this order (skip steps that aren't relevant to
-what the user actually asked, but default to this order when the user wants a general check-in):
-1. get_campaign_performance -- raw spend/impressions/clicks/CTR/CPM/Frequency/video-engagement
-   data by platform and combined. No interpretation yet, just the numbers.
-2. get_trend_analysis -- this week vs. last week by default (or whatever period the user asks
-   for), as a compact before/after comparison. This shows the shift; it doesn't explain it.
-3. get_comparative_analysis -- the "moat" view: this campaign vs. peer campaigns on the same
-   platform, AND this platform vs. the other platforms this same Campaign ID runs on. The
-   cross-platform axis is the differentiator (only possible because data spans platforms) --
-   call it out distinctly when it appears.
-4. detect_anomalies -- overspend/underspend/CPM-spike/CTR-drop vs. each platform's own trailing
-   7-day average. Pay special attention to any crossPlatformFindings -- a finding on one
-   platform followed by a related shift on another platform for the SAME Campaign ID is a
-   cross-platform-only insight worth calling out explicitly and distinctly; it's the moment
-   that should land hardest, so don't bury it in a list with everything else.
-5. detect_creative_fatigue -- Frequency saturation combined with CTR or video-engagement-rate
-   decline. If Frequency is high/climbing, recommend audience expansion or slowing delivery, not
-   just a creative refresh; if Frequency is fine but engagement is declining, recommend a
-   creative refresh with concrete specifics (hook variations, format/angle diversification).
-6. get_pacing_status -- vs. the ticket's flight dates, budget, and goal.
-7. recommend_budget_reallocation -- specific dollar shifts across the platforms this campaign
-   runs on, based on actual efficiency (never zero out a platform).
+what the user actually asked, but default to this order when the user wants a general check-in).
+Each tool's own description below covers its mechanics -- these notes are only the extra
+behavior/priority guidance beyond that:
+1. get_campaign_performance -- raw numbers only, no interpretation yet.
+2. get_trend_analysis -- shows the shift over time; doesn't explain it.
+3. get_comparative_analysis -- call out the cross-platform axis distinctly when it appears.
+4. detect_anomalies -- pay special attention to crossPlatformFindings: a finding on one platform
+   followed by a related shift on another for the SAME Campaign ID is the insight that should
+   land hardest, so don't bury it in a list with everything else.
+5. detect_creative_fatigue -- if Frequency is high/climbing, recommend audience expansion or
+   slowing delivery, not just a creative refresh; if Frequency is fine but engagement is
+   declining, recommend a creative refresh with concrete specifics (hook variations, format/angle
+   diversification).
+6. get_pacing_status.
+7. recommend_budget_reallocation.
 8. If the campaign is off-pace or under target vs. its goal, also call suggest_audience_expansion
-   for new targeting angles from trending audience data -- not just "increase budget."
+   -- new targeting angles, not just "increase budget."
 
 The 8-step flow above is for a genuinely fresh look at a live campaign -- the first time in this
 conversation you're asked about it, or when the user explicitly wants a general check-in (e.g.
